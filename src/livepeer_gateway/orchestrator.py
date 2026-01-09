@@ -9,7 +9,7 @@ import ssl
 import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
@@ -22,6 +22,131 @@ from . import lp_rpc_pb2_grpc
 from .errors import LivepeerGatewayError
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
+
+
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """
+    POST JSON to `url` and parse a JSON object response.
+
+    Raises LivepeerGatewayError on HTTP/network/JSON parsing errors.
+    """
+    req_headers: dict[str, str] = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "livepeer-python-gateway/0.1",
+    }
+    if headers:
+        req_headers.update(headers)
+
+    body = json.dumps(payload).encode("utf-8")
+    req = Request(url, data=body, headers=req_headers, method="POST")
+
+    # Always ignore HTTPS certificate validation (matches our gRPC behavior).
+    ssl_ctx = ssl._create_unverified_context()
+
+    try:
+        with urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
+            raw = resp.read().decode("utf-8")
+        data: Any = json.loads(raw)
+    except HTTPError as e:
+        raise LivepeerGatewayError(f"HTTP JSON error: HTTP {e.code} from endpoint (url={url})") from e
+    except ConnectionRefusedError as e:
+        raise LivepeerGatewayError(
+            f"HTTP JSON error: connection refused (is the server running? is the host/port correct?) (url={url})"
+        ) from e
+    except URLError as e:
+        raise LivepeerGatewayError(
+            f"HTTP JSON error: failed to reach endpoint: {getattr(e, 'reason', e)} (url={url})"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise LivepeerGatewayError(f"HTTP JSON error: endpoint did not return valid JSON: {e} (url={url})") from e
+    except Exception as e:
+        raise LivepeerGatewayError(
+            f"HTTP JSON error: unexpected error: {e.__class__.__name__}: {e} (url={url})"
+        ) from e
+
+    if not isinstance(data, dict):
+        raise LivepeerGatewayError(
+            f"HTTP JSON error: expected JSON object, got {type(data).__name__} (url={url})"
+        )
+
+    return data
+
+
+def _normalize_https_base_url(orch_url: str) -> str:
+    """
+    Normalize an orchestrator base URL to an https:// URL with no path/query/fragment.
+
+    Accepts:
+    - "host:port" (implicitly treated as https://host:port)
+    - "https://host:port"
+    """
+    orch_url = orch_url.strip().rstrip("/")
+    url = orch_url if "://" in orch_url else f"https://{orch_url}"
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
+    if not parsed.netloc:
+        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
+    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
+    return f"https://{parsed.netloc}"
+
+
+@dataclass(frozen=True)
+class StartJobRequest:
+    # GatewayRequestId The ID of the Gateway request (for logging purposes).
+    gateway_request_id: Optional[str] = None
+    # ManifestId The manifest ID from the orchestrator (for logging purposes).
+    manifest_id: Optional[str] = None
+    # ModelId Name of the pipeline to run in the live video to video job.
+    model_id: Optional[str] = None
+    # Params Initial parameters for the pipeline.
+    params: Optional[dict[str, Any]] = None
+    # StreamId The Stream ID (for logging purposes).
+    stream_id: Optional[str] = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.gateway_request_id is not None:
+            payload["gateway_request_id"] = self.gateway_request_id
+        if self.manifest_id is not None:
+            payload["manifest_id"] = self.manifest_id
+        if self.model_id is not None:
+            payload["model_id"] = self.model_id
+        if self.params is not None:
+            payload["params"] = self.params
+        if self.stream_id is not None:
+            payload["stream_id"] = self.stream_id
+        return payload
+
+
+@dataclass(frozen=True)
+class StartJobResponse:
+    # Will be filled in after we observe a real response schema.
+    raw: dict[str, Any]
+
+
+def StartJob(orch_url: str, req: StartJobRequest) -> StartJobResponse:
+    """
+    Start a live video-to-video job.
+
+    Calls POST {orch_url}/live-video-to-video with JSON body.
+    `orch_url` may be "host:port" or "https://host:port" (treated as https).
+    """
+    if not req.model_id:
+        raise ValueError("StartJob requires model_id")
+    base = _normalize_https_base_url(orch_url)
+    url = f"{base}/live-video-to-video"
+    data = post_json(url, req.to_json())
+    return StartJobResponse(raw=data)
 
 @dataclass(frozen=True)
 class SignerMaterial:
