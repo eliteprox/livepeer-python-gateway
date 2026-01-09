@@ -1,25 +1,42 @@
+import argparse
+
 from livepeer_gateway.orchestrator import GetOrchestratorInfo, LivepeerGatewayError
 
-ORCH_URL = "localhost:8935"
-SIGNER_URL = "https://vyt5g5r8tu9hrv.transfix.ai/sign-orchestrator-info"  # adjust
+DEFAULT_ORCH = "localhost:8935"
+DEFAULT_SIGNER_URL = "https://vyt5g5r8tu9hrv.transfix.ai/sign-orchestrator-info"  # adjust
 
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Fetch orchestrator info via Livepeer gRPC.")
+    p.add_argument(
+        "orchestrators",
+        nargs="*",
+        default=[DEFAULT_ORCH],
+        help=f"One or more orchestrator gRPC targets (host:port). Default: {DEFAULT_ORCH}",
+    )
+    p.add_argument(
+        "--signer-url",
+        default=DEFAULT_SIGNER_URL,
+        help="Remote signer URL used to sign the OrchestratorRequest.",
+    )
+    return p.parse_args()
 
 def main() -> None:
-    try:
+    args = _parse_args()
 
-        info = GetOrchestratorInfo(ORCH_URL, signer_url=SIGNER_URL)
+    for orch_url in args.orchestrators:
+        try:
+            info = GetOrchestratorInfo(orch_url, signer_url=args.signer_url)
 
-        print("=== OrchestratorInfo ===")
-        print("Transcoder URI:", info.transcoder)
-        print("ETH Address:", info.address.hex())
+            print("=== OrchestratorInfo ===")
+            print("Orchestrator:", orch_url)
+            print("Transcoder URI:", info.transcoder)
+            print("ETH Address:", info.address.hex())
+            print()
 
-        # Call again to demonstrate signer caching (no second signer HTTP request)
-        info2 = GetOrchestratorInfo(ORCH_URL, signer_url=SIGNER_URL)
-
-        print("Second call OK; same signer material cached.")
-
-    except LivepeerGatewayError as e:
-        print(f"ERROR: {e}")
+        except LivepeerGatewayError as e:
+            print(f"ERROR ({orch_url}): {e}")
+            print()
 
 if __name__ == "__main__":
     main()
