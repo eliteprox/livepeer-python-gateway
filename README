@@ -1,0 +1,11 @@
+Generate protobufs:
+
+```
+uv run generate-lp-rpc
+```
+
+Examples
+
+```
+uv run examples/get_orchestrator_info.py
+```
