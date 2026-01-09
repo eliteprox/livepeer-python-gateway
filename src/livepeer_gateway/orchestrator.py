@@ -130,29 +130,36 @@ def _trust_on_first_use_root_cert(target: str) -> Tuple[bytes, str]:
 
     Returns (root_cert_pem_bytes, authority_override).
     """
-    host, port = _split_host_port(target)
-
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    # gRPC requires HTTP/2; many gRPC-TLS servers expect ALPN "h2" in the ClientHello.
     try:
-        ctx.set_alpn_protocols(["h2"])
-    except NotImplementedError:
-        # Some Python/OpenSSL builds may not support ALPN; best effort.
-        pass
+        host, port = _split_host_port(target)
 
-    # Only send SNI for DNS names; IP SNI can trigger "Invalid server name indication".
-    server_hostname = None if _is_ip_address(host) else host
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # gRPC requires HTTP/2; many gRPC-TLS servers expect ALPN "h2" in the ClientHello.
+        try:
+            ctx.set_alpn_protocols(["h2"])
+        except NotImplementedError:
+            # Some Python/OpenSSL builds may not support ALPN; best effort.
+            pass
 
-    with socket.create_connection((host, port), timeout=5.0) as sock:
-        with ctx.wrap_socket(sock, server_hostname=server_hostname) as ssock:
-            der = ssock.getpeercert(binary_form=True)
+        # Only send SNI for DNS names; IP SNI can trigger "Invalid server name indication".
+        server_hostname = None if _is_ip_address(host) else host
 
-    pem = ssl.DER_cert_to_PEM_cert(der).encode("ascii")
-    decoded = _decode_pem_cert(pem)
-    authority = _pick_cert_authority(decoded) or host
-    return pem, authority
+        with socket.create_connection((host, port), timeout=5.0) as sock:
+            with ctx.wrap_socket(sock, server_hostname=server_hostname) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+
+        pem = ssl.DER_cert_to_PEM_cert(der).encode("ascii")
+        decoded = _decode_pem_cert(pem)
+        authority = _pick_cert_authority(decoded) or host
+        return pem, authority
+    except Exception as e:
+        raise OrchestratorRpcError(
+            target,
+            f"TLS trust-on-first-use probe failed: {e.__class__.__name__}: {e}",
+            cause=e,
+        ) from None
 
 
 @lru_cache(maxsize=None)
@@ -267,7 +274,24 @@ class OrchestratorClient:
             # capabilities=...  # can be added later
         )
 
-        return self._stub.GetOrchestrator(request, timeout=5.0)
+        try:
+            return self._stub.GetOrchestrator(request, timeout=5.0)
+        except grpc.RpcError as e:
+            # e.details() may be None; be defensive
+            details = ""
+            try:
+                details = e.details() or ""
+            except Exception:
+                details = ""
+
+            code = ""
+            try:
+                code = str(e.code())
+            except Exception:
+                code = "UNKNOWN"
+
+            msg = details or repr(e)
+            raise OrchestratorRpcError(self.orch_url, f"{code}: {msg}", cause=e) from None
 
 
 def GetOrchestratorInfo(orch_url: str, *, signer_url: Optional[str] = None) -> lp_rpc_pb2.OrchestratorInfo:
