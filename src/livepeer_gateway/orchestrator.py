@@ -326,11 +326,12 @@ def _trust_on_first_use_root_cert(orch_url: str) -> Tuple[bytes, str, str]:
 
 
 @lru_cache(maxsize=None)
-def _get_signer_material(signer_url: str) -> SignerMaterial:
+def _get_signer_material(signer_base_url: str) -> SignerMaterial:
     """
-    Fetch signer material exactly once per signer_url for the lifetime of the process.
+    Fetch signer material exactly once per signer_base_url for the lifetime of the process.
     Subsequent calls return cached data.
     """
+    signer_url = f"{_normalize_https_base_url(signer_base_url)}/sign-orchestrator-info"
     req = Request(
         signer_url,
         headers={

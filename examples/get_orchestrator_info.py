@@ -3,7 +3,7 @@ import argparse
 from livepeer_gateway.orchestrator import GetOrchestratorInfo, LivepeerGatewayError
 
 DEFAULT_ORCH = "localhost:8935"
-DEFAULT_SIGNER_URL = "https://vyt5g5r8tu9hrv.transfix.ai/sign-orchestrator-info"  # adjust
+DEFAULT_SIGNER_URL = "https://vyt5g5r8tu9hrv.transfix.ai"  # adjust
 
 
 def _parse_args() -> argparse.Namespace:
@@ -17,7 +17,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--signer-url",
         default=DEFAULT_SIGNER_URL,
-        help="Remote signer URL used to sign the OrchestratorRequest.",
+        help="Remote signer base URL (no path). Used for /sign-orchestrator-info.",
     )
     return p.parse_args()
 
