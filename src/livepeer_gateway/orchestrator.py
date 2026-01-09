@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
 
@@ -65,6 +66,31 @@ def _split_host_port(target: str) -> Tuple[str, int]:
         raise ValueError(f"Invalid gRPC target (expected host:port): {target!r}")
     host, port_s = target.split(":", 1)
     return host, int(port_s)
+
+
+def _normalize_grpc_target(orch_url: str) -> str:
+    """
+    Normalize user input into a gRPC target string suitable for grpc.secure_channel().
+
+    Accepts:
+    - "host:port"
+    - "[ipv6]:port"
+    - "https://host:port" (scheme is stripped; TLS is still used by the channel)
+    """
+    orch_url = orch_url.strip()
+    # If no scheme is provided, treat it as https://... implicitly.
+    # Also avoids `urlparse("localhost:8935")` interpreting "localhost" as a scheme.
+    url = orch_url if "://" in orch_url else f"https://{orch_url}"
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
+    if not parsed.netloc:
+        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
+    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        # gRPC targets are host:port; ignore any path-like components by rejecting explicitly.
+        raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
+    return parsed.netloc
 
 
 def _is_ip_address(host: str) -> bool:
@@ -123,40 +149,52 @@ def _decode_pem_cert(pem: bytes) -> dict:
 
 
 @lru_cache(maxsize=None)
-def _trust_on_first_use_root_cert(target: str) -> Tuple[bytes, str]:
+def _trust_on_first_use_root_cert_target(target: str) -> Tuple[bytes, str]:
     """
     Fetch the server certificate via a TLS handshake with verification disabled,
     then "trust" that exact certificate by using it as the root cert for gRPC.
 
     Returns (root_cert_pem_bytes, authority_override).
     """
+    host, port = _split_host_port(target)
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    # gRPC requires HTTP/2; many gRPC-TLS servers expect ALPN "h2" in the ClientHello.
     try:
-        host, port = _split_host_port(target)
+        ctx.set_alpn_protocols(["h2"])
+    except NotImplementedError:
+        # Some Python/OpenSSL builds may not support ALPN; best effort.
+        pass
 
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        # gRPC requires HTTP/2; many gRPC-TLS servers expect ALPN "h2" in the ClientHello.
-        try:
-            ctx.set_alpn_protocols(["h2"])
-        except NotImplementedError:
-            # Some Python/OpenSSL builds may not support ALPN; best effort.
-            pass
+    # Only send SNI for DNS names; IP SNI can trigger "Invalid server name indication".
+    server_hostname = None if _is_ip_address(host) else host
 
-        # Only send SNI for DNS names; IP SNI can trigger "Invalid server name indication".
-        server_hostname = None if _is_ip_address(host) else host
+    with socket.create_connection((host, port), timeout=5.0) as sock:
+        with ctx.wrap_socket(sock, server_hostname=server_hostname) as ssock:
+            der = ssock.getpeercert(binary_form=True)
 
-        with socket.create_connection((host, port), timeout=5.0) as sock:
-            with ctx.wrap_socket(sock, server_hostname=server_hostname) as ssock:
-                der = ssock.getpeercert(binary_form=True)
+    pem = ssl.DER_cert_to_PEM_cert(der).encode("ascii")
+    decoded = _decode_pem_cert(pem)
+    authority = _pick_cert_authority(decoded) or host
+    return pem, authority
 
-        pem = ssl.DER_cert_to_PEM_cert(der).encode("ascii")
-        decoded = _decode_pem_cert(pem)
-        authority = _pick_cert_authority(decoded) or host
-        return pem, authority
+
+def _trust_on_first_use_root_cert(orch_url: str) -> Tuple[bytes, str, str]:
+    """
+    Wrapper that:
+    - accepts https://host:port or host:port
+    - returns (root_pem, authority, target)
+    - re-raises failures as OrchestratorRpcError with the *original* orch_url
+    """
+    try:
+        target = _normalize_grpc_target(orch_url)
+        root_pem, authority = _trust_on_first_use_root_cert_target(target)
+        return root_pem, authority, target
     except Exception as e:
         raise OrchestratorRpcError(
-            target,
+            orch_url,
             f"TLS trust-on-first-use probe failed: {e.__class__.__name__}: {e}",
             cause=e,
         ) from None
@@ -245,13 +283,13 @@ class OrchestratorClient:
         # Always use TLS. "Ignore" invalid/self-signed certs by trusting the exact
         # certificate the server presents (trust-on-first-use) and overriding the
         # expected authority to match that cert.
-        root_pem, authority = _trust_on_first_use_root_cert(orch_url)
+        root_pem, authority, target = _trust_on_first_use_root_cert(orch_url)
         credentials = grpc.ssl_channel_credentials(root_certificates=root_pem)
         options = [
             ("grpc.ssl_target_name_override", authority),
             ("grpc.default_authority", authority),
         ]
-        self._channel = grpc.secure_channel(orch_url, credentials, options=options)
+        self._channel = grpc.secure_channel(target, credentials, options=options)
         self._stub = lp_rpc_pb2_grpc.OrchestratorStub(self._channel)
 
     def GetOrchestratorInfo(self) -> lp_rpc_pb2.OrchestratorInfo:
