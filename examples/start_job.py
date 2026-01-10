@@ -5,8 +5,7 @@ from livepeer_gateway.orchestrator import GetOrchestratorInfo, LivepeerGatewayEr
 
 DEFAULT_ORCH = "localhost:8935"
 DEFAULT_SIGNER_URL = "https://vyt5g5r8tu9hrv.transfix.ai"  # base URL; adjust
-DEFAULT_MODEL_ID = "default"
-
+DEFAULT_MODEL_ID = "noop" # fix
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Fetch orchestrator info via Livepeer gRPC.")
@@ -43,10 +42,11 @@ def main() -> None:
 
             url = info.transcoder
             job = StartJob(
-                orch_url,
+                info,
                 StartJobRequest(
                     model_id=args.model_id,
                 ),
+                signer_base_url=args.signer_url,
             )
             print("=== StartJob ===")
             print("Endpoint:", f"{url}/live-video-to-video")

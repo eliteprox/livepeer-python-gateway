@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import ipaddress
@@ -152,6 +153,24 @@ def _normalize_https_base_url(orch_url: str) -> str:
     return f"https://{parsed.netloc}"
 
 
+def _normalize_https_origin(url: str) -> str:
+    """
+    Normalize a URL (possibly with a path) into an https:// origin (scheme + host:port).
+
+    Accepts:
+    - "host:port" (implicitly https://host:port)
+    - "https://host:port[/...]" (path/query/fragment are ignored)
+    """
+    url = url.strip()
+    u = url if "://" in url else f"https://{url}"
+    parsed = urlparse(u)
+    if parsed.scheme != "https":
+        raise ValueError(f"Only https:// URLs are supported (got {parsed.scheme!r})")
+    if not parsed.netloc:
+        raise ValueError(f"Invalid https URL: {url!r}")
+    return f"https://{parsed.netloc}"
+
+
 @dataclass(frozen=True)
 class StartJobRequest:
     # GatewayRequestId The ID of the Gateway request (for logging purposes).
@@ -186,18 +205,82 @@ class StartJobResponse:
     raw: dict[str, Any]
 
 
-def StartJob(orch_url: str, req: StartJobRequest) -> StartJobResponse:
+@dataclass(frozen=True)
+class GetPaymentResponse:
+    payment: str
+    seg_creds: Optional[str] = None
+
+
+def GetPayment(
+    signer_base_url: str,
+    info: lp_rpc_pb2.OrchestratorInfo,
+    *,
+    typ: str = "lv2v",
+) -> GetPaymentResponse:
+    """
+    Call the remote signer to generate an automatic payment for a job.
+
+    POST {signer_base_url}/generate-live-payment with:
+      orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
+      type: job type (default: lv2v)
+    """
+    base = _normalize_https_base_url(signer_base_url)
+    url = f"{base}/generate-live-payment"
+
+    # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
+    pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
+    orch_b64 = base64.b64encode(pb).decode("ascii")
+
+    data = post_json(url, {"orchestrator": orch_b64, "type": typ})
+
+    payment = data.get("payment")
+    if not isinstance(payment, str) or not payment:
+        raise LivepeerGatewayError(f"GetPayment error: missing/invalid 'payment' in response (url={url})")
+
+    seg_creds = data.get("segCreds")
+    if seg_creds is not None and not isinstance(seg_creds, str):
+        raise LivepeerGatewayError(f"GetPayment error: invalid 'segCreds' in response (url={url})")
+
+    return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
+
+
+def StartJob(
+    info: lp_rpc_pb2.OrchestratorInfo,
+    req: StartJobRequest,
+    *,
+    signer_base_url: str,
+    typ: str = "lv2v",
+) -> StartJobResponse:
     """
     Start a live video-to-video job.
 
-    Calls POST {orch_url}/live-video-to-video with JSON body.
-    `orch_url` may be "host:port" or "https://host:port" (treated as https).
+    Calls POST {info.transcoder}/live-video-to-video with JSON body.
+    Before posting, calls GetPayment(...) and forwards results as headers:
+      - Livepeer-Payment
+      - Livepeer-Segment (optional)
     """
     if not req.model_id:
-        raise ValueError("StartJob requires model_id")
-    base = _normalize_https_base_url(orch_url)
+        raise LivepeerGatewayError("StartJob requires model_id")
+
+    # If using remote signer, price_info must be valid
+    if signer_base_url:
+        has_price_info = info.HasField("price_info")
+        price_is_zero = has_price_info and info.price_info.pricePerUnit == 0
+        if not has_price_info or price_is_zero:
+            raise LivepeerGatewayError(
+                "StartJob requires valid price_info in OrchestratorInfo when using remote signer. "
+                "The orchestrator returned missing or zero price_info."
+            )
+
+    payment = GetPayment(signer_base_url, info, typ=typ)
+    headers: dict[str, str] = {
+        "Livepeer-Payment": payment.payment,
+        "Livepeer-Segment": payment.seg_creds,
+    }
+
+    base = _normalize_https_base_url(info.transcoder)
     url = f"{base}/live-video-to-video"
-    data = post_json(url, req.to_json())
+    data = post_json(url, req.to_json(), headers=headers)
     return StartJobResponse(raw=data)
 
 @dataclass(frozen=True)
