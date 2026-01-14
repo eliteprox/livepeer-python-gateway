@@ -23,14 +23,14 @@ class TricklePublisher:
     def __init__(self, url: str, mime_type: str):
         self.url = url.rstrip("/")
         self.mime_type = mime_type
-        self.idx = 0
+        self.seq = 0
 
         # Lazily initialized async runtime bits (safe to construct in sync code).
         self._lock: Optional[asyncio.Lock] = None
         self._session: Optional[aiohttp.ClientSession] = None
 
         # Preconnected writer queue for the next segment.
-        self._next_queue: Optional[asyncio.Queue[Optional[bytes]]] = None
+        self._next_writer: Optional[asyncio.Queue[Optional[bytes]]] = None
 
     async def __aenter__(self) -> "TricklePublisher":
         return self
@@ -117,15 +117,15 @@ class TricklePublisher:
         assert self._lock is not None
 
         async with self._lock:
-            if self._next_queue is None:
-                self._next_queue = await self.preconnect(self.idx)
+            if self._next_writer is None:
+                self._next_writer = await self.preconnect(self.seq)
 
-            seq = self.idx
-            queue = self._next_queue
-            self._next_queue = None
+            seq = self.seq
+            queue = self._next_writer
+            self._next_writer = None
 
             # Preconnect the next segment in the background.
-            self.idx += 1
+            self.seq += 1
             asyncio.create_task(self._preconnect_next())
 
         return SegmentWriter(queue, seq)
@@ -135,13 +135,13 @@ class TricklePublisher:
         assert self._lock is not None
 
         async with self._lock:
-            if self._next_queue is not None:
+            if self._next_writer is not None:
                 return
-            self._next_queue = await self.preconnect(self.idx)
+            self._next_writer = await self.preconnect(self.seq)
 
     async def close(self) -> None:
         # If the publisher was never used, avoid creating a session just to close it.
-        if self._session is None and self._lock is None and self._next_queue is None:
+        if self._session is None and self._lock is None and self._next_writer is None:
             return
 
         await self._ensure_runtime()
@@ -149,9 +149,9 @@ class TricklePublisher:
 
         logging.info("Trickle close: %s", self.url)
         async with self._lock:
-            if self._next_queue is not None:
-                await SegmentWriter(self._next_queue).close()
-                self._next_queue = None
+            if self._next_writer is not None:
+                await SegmentWriter(self._next_writer).close()
+                self._next_writer = None
 
             if self._session is not None:
                 try:
