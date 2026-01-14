@@ -31,6 +31,7 @@ class TricklePublisher:
 
         # Preconnected writer queue for the next segment.
         self._next_writer: Optional[asyncio.Queue[Optional[bytes]]] = None
+        self._next_seq: int = None
 
     async def __aenter__(self) -> "TricklePublisher":
         return self
@@ -117,27 +118,34 @@ class TricklePublisher:
         assert self._lock is not None
 
         async with self._lock:
-            if self._next_writer is None:
+            if self._next_writer is None or self._next_seq != self.seq:
+                # don't have queue, or a queue for the wrong seq
                 self._next_writer = await self.preconnect(self.seq)
+                self._next_seq = self.seq
 
             seq = self.seq
             queue = self._next_writer
             self._next_writer = None
+            self._next_seq = None
 
             # Preconnect the next segment in the background.
             self.seq += 1
-            asyncio.create_task(self._preconnect_next())
+            asyncio.create_task(self._preconnect_task(self.seq))
 
         return SegmentWriter(queue, seq)
 
-    async def _preconnect_next(self) -> None:
+    async def _preconnect_task(self, seq: int) -> None:
         await self._ensure_runtime()
         assert self._lock is not None
 
         async with self._lock:
             if self._next_writer is not None:
                 return
-            self._next_writer = await self.preconnect(self.seq)
+            if self.seq != seq:
+                # seq is stale
+                return
+            self._next_writer = await self.preconnect(seq)
+            self._next_seq = seq
 
     async def close(self) -> None:
         # If the publisher was never used, avoid creating a session just to close it.
