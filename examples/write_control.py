@@ -73,10 +73,8 @@ async def main() -> None:
         print(f"ERROR ({args.orchestrator}): {e}")
     finally:
         try:
-            # Best-effort (no-op if control was never opened).
             if "job" in locals():
-                if job.control:
-                    await job.control.close_control()
+                await job.close()
         except Exception:
             pass
 

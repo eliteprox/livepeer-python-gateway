@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -223,6 +224,23 @@ class LiveVideoToVideo:
             control=control,
             media=media,
         )
+
+    async def close(self) -> None:
+        """
+        Close any nested helpers (control, media, etc) best-effort.
+        """
+        tasks = []
+        if self.control is not None:
+            tasks.append(self.control.close_control())
+        if self.media is not None:
+            tasks.append(self.media.close())
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 @dataclass(frozen=True)

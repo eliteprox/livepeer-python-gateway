@@ -78,8 +78,8 @@ async def main() -> None:
     except LivepeerGatewayError as e:
         print(f"ERROR ({args.orchestrator}): {e}")
     finally:
-        if job is not None and job.media is not None:
-            await job.media.close()
+        if job is not None:
+            await job.close()
 
 
 if __name__ == "__main__":
