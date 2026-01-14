@@ -8,7 +8,7 @@ import re
 import socket
 import ssl
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
@@ -21,6 +21,7 @@ from . import lp_rpc_pb2
 from . import lp_rpc_pb2_grpc
 
 from .errors import LivepeerGatewayError
+from .trickle_publisher import TricklePublisher
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
 
@@ -195,24 +196,54 @@ class StartJobRequest:
 
 
 @dataclass(frozen=True)
-class StartJobResponse:
+class LiveVideoToVideo:
     raw: dict[str, Any]
     manifest_id: Optional[str] = None
     publish_url: Optional[str] = None
     subscribe_url: Optional[str] = None
     control_url: Optional[str] = None
     events_url: Optional[str] = None
+    _control_publisher: Optional[TricklePublisher] = field(
+        default=None, repr=False, compare=False
+    )
 
     @staticmethod
-    def from_json(data: dict[str, Any]) -> "StartJobResponse":
-        return StartJobResponse(
+    def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
+        control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
+        publisher = TricklePublisher(control_url, "application/json") if control_url else None
+        return LiveVideoToVideo(
             raw=data,
-            control_url=data.get("control_url") if isinstance(data.get("control_url"), str) else None,
+            control_url=control_url,
             events_url=data.get("events_url") if isinstance(data.get("events_url"), str) else None,
             manifest_id=data.get("manifest_id") if isinstance(data.get("manifest_id"), str) else None,
             publish_url=data.get("publish_url") if isinstance(data.get("publish_url"), str) else None,
             subscribe_url=data.get("subscribe_url") if isinstance(data.get("subscribe_url"), str) else None,
+            _control_publisher=publisher,
         )
+
+    async def write_control(self, msg: dict[str, Any]) -> None:
+        """
+        Publish an unstructured JSON message onto the trickle control channel.
+
+        One `write_control()` call sends one message per trickle segment.
+        """
+        if not isinstance(msg, dict):
+            raise TypeError(f"write_control expects dict, got {type(msg).__name__}")
+        if not self.control_url:
+            raise LivepeerGatewayError("No control_url present on this LiveVideoToVideo job")
+        if not self._control_publisher:
+            raise LivepeerGatewayError("Control publisher not initialized")
+
+        payload = json.dumps(msg).encode("utf-8")
+        async with await self._control_publisher.next() as segment:
+            await segment.write(payload)
+
+    async def close_control(self) -> None:
+        """
+        Close the control-channel publisher (best-effort).
+        """
+        if self._control_publisher:
+            await self._control_publisher.close()
 
 
 @dataclass(frozen=True)
@@ -281,7 +312,7 @@ def StartJob(
     *,
     signer_base_url: Optional[str] = None,
     typ: str = "lv2v",
-) -> StartJobResponse:
+) -> LiveVideoToVideo:
     """
     Start a live video-to-video job.
 
@@ -299,7 +330,10 @@ def StartJob(
     base = _normalize_https_base_url(info.transcoder)
     url = f"{base}/live-video-to-video"
     data = post_json(url, req.to_json(), headers=headers)
-    return StartJobResponse.from_json(data)
+    return LiveVideoToVideo.from_json(data)
+
+
+
 
 @dataclass(frozen=True)
 class SignerMaterial:
