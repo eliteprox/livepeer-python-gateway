@@ -84,9 +84,47 @@ def main() -> None:
 
             print()
 
+            if info.hardware:
+                print("Hardware / GPU:")
+                for hw in info.hardware:
+                    pipeline = hw.pipeline or "-"
+                    model_id = hw.model_id or "-"
+                    print(f"- Pipeline: {pipeline} | Model: {model_id}")
+                    if not hw.gpu_info:
+                        print("  GPU info: not provided")
+                        continue
+                    for key, gpu in hw.gpu_info.items():
+                        gpu_id = gpu.id or "-"
+                        name = gpu.name or "-"
+                        compute = f"{gpu.major}.{gpu.minor}"
+                        mem_free = format_bytes(int(gpu.memory_free))
+                        mem_total = format_bytes(int(gpu.memory_total))
+                        print(
+                            "  "
+                            f"{key}: id={gpu_id} name={name} "
+                            f"compute={compute} mem_free={mem_free} mem_total={mem_total}"
+                        )
+                print()
+            else:
+                print("Hardware / GPU: not provided")
+                print()
+
         except LivepeerGatewayError as e:
             print(f"ERROR ({orch_url}): {e}")
             print()
+
+def format_bytes(num_bytes: int) -> str:
+    if num_bytes < 0:
+        return f"{num_bytes} B"
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    size = float(num_bytes)
+    unit_idx = 0
+    while size >= 1024.0 and unit_idx < len(units) - 1:
+        size /= 1024.0
+        unit_idx += 1
+    if unit_idx == 0:
+        return f"{int(size)} {units[unit_idx]}"
+    return f"{size:.2f} {units[unit_idx]} ({num_bytes} B)"
 
 if __name__ == "__main__":
     main()
