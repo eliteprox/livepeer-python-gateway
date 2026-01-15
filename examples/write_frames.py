@@ -4,6 +4,7 @@ from fractions import Fraction
 
 import av
 
+from livepeer_gateway.media_publish import MediaPublishConfig
 from livepeer_gateway.orchestrator import (
     GetOrchestratorInfo,
     LivepeerGatewayError,
@@ -64,8 +65,7 @@ async def main() -> None:
         print("publish_url:", job.publish_url)
         print()
 
-        if not job.media:
-            raise LivepeerGatewayError("No publish_url present on this LiveVideoToVideo job")
+        media = job.start_media(MediaPublishConfig(fps=args.fps))
 
         time_base = Fraction(1, int(round(args.fps)))
         for i in range(max(0, args.count)):
@@ -73,7 +73,7 @@ async def main() -> None:
             frame = _solid_rgb_frame(args.width, args.height, (color, 0, 255 - color))
             frame.pts = i
             frame.time_base = time_base
-            await job.media.write_frame(frame)
+            await media.write_frame(frame)
             await asyncio.sleep(frame_interval)
     except LivepeerGatewayError as e:
         print(f"ERROR ({args.orchestrator}): {e}")

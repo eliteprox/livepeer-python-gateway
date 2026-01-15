@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from fractions import Fraction
 from typing import Optional, Set
 
@@ -36,6 +38,26 @@ def _rescale_pts(pts: int, src_tb: Fraction, dst_tb: Fraction) -> int:
     return int(round(float((Fraction(pts) * src_tb) / dst_tb)))
 
 
+def _normalize_fps(fps: Optional[float], *, time_base: Optional[Fraction]) -> int:
+    if fps is None and time_base is not None:
+        try:
+            tb = _fraction_from_time_base(time_base)
+            if float(tb) > 0:
+                fps = 1.0 / float(tb)
+        except Exception:
+            fps = None
+    if fps is None or not math.isfinite(fps) or fps <= 0:
+        fps = 30.0
+    return max(1, int(round(fps)))
+
+
+@dataclass(frozen=True)
+class MediaPublishConfig:
+    fps: Optional[float] = None
+    mime_type: str = "video/mp2t"
+    keyframe_interval_s: float = 2.0
+
+
 class MediaPublish:
     def __init__(
         self,
@@ -43,10 +65,12 @@ class MediaPublish:
         *,
         mime_type: str = "video/mp2t",
         keyframe_interval_s: float = 2.0,
+        fps: Optional[float] = None,
     ) -> None:
         self.publish_url = publish_url
         self._publisher = TricklePublisher(publish_url, mime_type)
         self._keyframe_interval_s = float(keyframe_interval_s)
+        self._fps_hint = fps
 
         self._queue: queue.Queue[object] = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -62,6 +86,7 @@ class MediaPublish:
         self._video_stream: Optional[av.video.stream.VideoStream] = None
         self._wallclock_start: Optional[float] = None
         self._last_keyframe_time: Optional[float] = None
+        self._last_out_pts: Optional[int] = None
 
     async def write_frame(self, frame: av.VideoFrame) -> None:
         if self._closed:
@@ -69,7 +94,7 @@ class MediaPublish:
         if not isinstance(frame, av.VideoFrame):
             raise TypeError(f"write_frame expects av.VideoFrame, got {type(frame).__name__}")
         if self._error:
-            raise LivepeerGatewayError("MediaPublish encoder failed") from self._error
+            raise LivepeerGatewayError(f"MediaPublish encoder failed: {self._error}") from self._error
 
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
@@ -142,7 +167,6 @@ class MediaPublish:
 
         segment_options = {
             "segment_time": str(self._keyframe_interval_s),
-            "reset_timestamps": "1",
             "segment_format": "mpegts",
         }
 
@@ -154,18 +178,21 @@ class MediaPublish:
             options=segment_options,
         )
 
-        video_opts = {"bf": "0"}
-        if self._container.format.name == "segment":
-            video_opts["preset"] = "superfast"
-            video_opts["tune"] = "zerolatency"
-            video_opts["forced-idr"] = "1"
+        video_opts = {
+            "bf": "0",
+            "preset": "superfast",
+            "tune": "zerolatency",
+            "forced-idr": "1",
+        }
+        video_kwargs = {
+            "time_base": _OUT_TIME_BASE,
+            "width": first_frame.width,
+            "height": first_frame.height,
+            "pix_fmt": "yuv420p",
+        }
 
-        self._video_stream = self._container.add_stream("libx264", options=video_opts)
-        self._video_stream.time_base = _OUT_TIME_BASE
-        self._video_stream.width = first_frame.width
-        self._video_stream.height = first_frame.height
-        self._video_stream.pix_fmt = "yuv420p"
-        self._video_stream.codec_context.max_b_frames = 0
+        rounded_fps = _normalize_fps(self._fps_hint, time_base=first_frame.time_base)
+        self._video_stream = self._container.add_stream("libx264", rate=rounded_fps, options=video_opts, **video_kwargs)
 
     def _encode_frame(self, frame: av.VideoFrame) -> None:
         if self._video_stream is None or self._container is None:
@@ -178,6 +205,11 @@ class MediaPublish:
             frame = frame.reformat(format="yuv420p")
 
         current_time_s, out_pts = self._compute_pts(source_pts, source_tb)
+        if self._last_out_pts is not None and out_pts <= self._last_out_pts:
+            # timestamp would overlap with previous frame, so drop
+            # happens if frames come in faster than the encode rate
+            return
+        self._last_out_pts = out_pts
         frame.pts = out_pts
         frame.time_base = _OUT_TIME_BASE
 
@@ -187,6 +219,8 @@ class MediaPublish:
         ):
             frame.pict_type = PictureType.I
             self._last_keyframe_time = current_time_s
+        else:
+            frame.pict_type = PictureType.NONE
 
         packets = self._video_stream.encode(frame)
         for packet in packets:

@@ -9,6 +9,7 @@ from fractions import Fraction
 
 import av
 
+from livepeer_gateway.media_publish import MediaPublishConfig
 from livepeer_gateway.orchestrator import (
     GetOrchestratorInfo,
     LivepeerGatewayError,
@@ -124,8 +125,7 @@ async def main() -> None:
         print("publish_url:", job.publish_url)
         print()
 
-        if not job.media:
-            raise LivepeerGatewayError("No publish_url present on this LiveVideoToVideo job")
+        media = job.start_media(MediaPublishConfig(fps=args.fps))
 
         av.logging.set_level(av.logging.ERROR)
         input_ = av.open(
@@ -154,7 +154,7 @@ async def main() -> None:
                 break
             frame = item
             frame.pts = None
-            await job.media.write_frame(frame)
+            await media.write_frame(frame)
     except KeyboardInterrupt:
         print("Recording stopped by user")
     except LivepeerGatewayError as e:

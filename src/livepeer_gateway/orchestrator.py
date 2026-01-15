@@ -9,7 +9,7 @@ import re
 import socket
 import ssl
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
@@ -22,7 +22,7 @@ from . import lp_rpc_pb2
 from . import lp_rpc_pb2_grpc
 
 from .control import Control
-from .media_publish import MediaPublish
+from .media_publish import MediaPublish, MediaPublishConfig
 from .errors import LivepeerGatewayError
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
@@ -206,14 +206,13 @@ class LiveVideoToVideo:
     control_url: Optional[str] = None
     events_url: Optional[str] = None
     control: Optional[Control] = None
-    media: Optional[MediaPublish] = None
+    _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
         control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
         control = Control(control_url) if control_url else None
         publish_url = data.get("publish_url") if isinstance(data.get("publish_url"), str) else None
-        media = MediaPublish(publish_url) if publish_url else None
         return LiveVideoToVideo(
             raw=data,
             control_url=control_url,
@@ -222,8 +221,23 @@ class LiveVideoToVideo:
             publish_url=publish_url,
             subscribe_url=data.get("subscribe_url") if isinstance(data.get("subscribe_url"), str) else None,
             control=control,
-            media=media,
         )
+
+    def start_media(self, config: MediaPublishConfig) -> MediaPublish:
+        """
+        Instantiate and return a MediaPublish helper for this job.
+        """
+        if not self.publish_url:
+            raise LivepeerGatewayError("No publish_url present on this LiveVideoToVideo job")
+        if self._media is None:
+            media = MediaPublish(
+                self.publish_url,
+                mime_type=config.mime_type,
+                keyframe_interval_s=config.keyframe_interval_s,
+                fps=config.fps,
+            )
+            object.__setattr__(self, "_media", media)
+        return self._media
 
     async def close(self) -> None:
         """
@@ -232,8 +246,8 @@ class LiveVideoToVideo:
         tasks = []
         if self.control is not None:
             tasks.append(self.control.close_control())
-        if self.media is not None:
-            tasks.append(self.media.close())
+        if self._media is not None:
+            tasks.append(self._media.close())
         if not tasks:
             return
 
