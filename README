@@ -21,3 +21,8 @@ Write raw frames to a LiveVideoToVideo job
 ```
 uv run examples/write_frames.py
 ```
+
+Capture MacOS camera frames and publish via write_frame
+```
+uv run examples/camera_capture.py
+```
