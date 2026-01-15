@@ -20,9 +20,10 @@ class TricklePublisher:
                 await seg.write(b"...")
     """
 
-    def __init__(self, url: str, mime_type: str):
+    def __init__(self, url: str, mime_type: str, *, connection_close: bool = False):
         self.url = url.rstrip("/")
         self.mime_type = mime_type
+        self.connection_close = connection_close
         self.seq = 0
 
         # Lazily initialized async runtime bits (safe to construct in sync code).
@@ -69,9 +70,12 @@ class TricklePublisher:
         assert self._session is not None
 
         try:
+            headers = {"Content-Type": self.mime_type}
+            if self.connection_close:
+                headers["Connection"] = "close"
             resp = await self._session.post(
                 url,
-                headers={"Connection": "close", "Content-Type": self.mime_type},
+                headers=headers,
                 data=self._stream_data(queue),
             )
             if resp.status != 200:
