@@ -175,6 +175,26 @@ def _normalize_https_origin(url: str) -> str:
     return f"https://{parsed.netloc}"
 
 
+def _normalize_http_or_https_origin(url: str) -> str:
+    """
+    Normalize a URL (possibly with a path) into an http:// or https:// origin (scheme + host:port).
+    Allows both HTTP and HTTPS schemes for signer URLs.
+
+    Accepts:
+    - "host:port" (implicitly https://host:port)
+    - "http://host:port[/...]" (path/query/fragment are ignored)
+    - "https://host:port[/...]" (path/query/fragment are ignored)
+    """
+    url = url.strip()
+    u = url if "://" in url else f"https://{url}"
+    parsed = urlparse(u)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http:// or https:// URLs are supported (got {parsed.scheme!r})")
+    if not parsed.netloc:
+        raise ValueError(f"Invalid URL: {url!r}")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 @dataclass(frozen=True)
 class StartJobRequest:
     # The ID of the Gateway request (for logging purposes).
@@ -349,7 +369,7 @@ def GetPayment(
             "The orchestrator returned missing or zero price_info."
         )
 
-    base = _normalize_https_base_url(signer_base_url)
+    base = _normalize_http_or_https_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
@@ -587,8 +607,8 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
         return SignerMaterial(address=None, sig=None)
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
-    # Normalize to an https:// origin and append the expected path.
-    signer_url = f"{_normalize_https_origin(signer_base_url)}/sign-orchestrator-info"
+    # Normalize to an http:// or https:// origin and append the expected path.
+    signer_url = f"{_normalize_http_or_https_origin(signer_base_url)}/sign-orchestrator-info"
 
     try:
         # Some signers accept/expect POST with an empty JSON object.
