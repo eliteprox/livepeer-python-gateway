@@ -19,7 +19,7 @@ DEFAULT_MODEL_ID = "noop"  # fix
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Start an LV2V job and publish raw frames via publish_url.")
     p.add_argument(
-        "orchestrator",
+        "--orchestrator",
         nargs="?",
         default=DEFAULT_ORCH,
         help=f"Orchestrator gRPC target (host:port). Default: {DEFAULT_ORCH}",
