@@ -748,7 +748,6 @@ class OrchestratorClient:
             address=signer.address,
             sig=signer.sig,
             ignoreCapacityCheck=True,
-            # capabilities=...  # can be added later
         )
 
         try:

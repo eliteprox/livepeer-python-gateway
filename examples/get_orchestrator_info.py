@@ -1,5 +1,6 @@
 import argparse
 
+from livepeer_gateway import lp_rpc_pb2
 from livepeer_gateway.capabilities import (
     compute_available,
     format_capability,
@@ -30,12 +31,16 @@ def main() -> None:
 
     for orch_url in args.orchestrators:
         try:
-            info = GetOrchestratorInfo(orch_url, signer_url=args.signer)
+            info = GetOrchestratorInfo(
+                orch_url,
+                signer_url=args.signer,
+            )
 
             print("=== OrchestratorInfo ===")
             print("Orchestrator:", orch_url)
             print("Transcoder URI:", info.transcoder)
             print("ETH Address:", info.address.hex())
+            
             if info.HasField("capabilities") and info.capabilities.version:
                 print("Version:", info.capabilities.version)
             else:
