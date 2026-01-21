@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import os
-import ipaddress
 import re
 import socket
 import ssl
@@ -360,20 +360,46 @@ def GetPayment(
         seg = base64.b64encode(seg.SerializeToString()).decode("ascii")
         return GetPaymentResponse(seg_creds=seg, payment="")
 
-    # Price info must be valid
-    has_price_info = info.HasField("price_info")
-    price_is_zero = has_price_info and info.price_info.pricePerUnit == 0
-    if not has_price_info or price_is_zero:
+    # Price info must be present (can be zero for free/test services)
+    # Check if either price_info or capabilities_prices is provided
+    has_general_price_structure = info.HasField("price_info")
+    has_capability_price_structure = bool(info.capabilities_prices)
+    
+    if not has_general_price_structure and not has_capability_price_structure:
         raise LivepeerGatewayError(
-            "Valid price info required when using remote signer. "
-            "The orchestrator returned missing or zero price_info."
+            "Price info required when using remote signer. "
+            "The orchestrator returned no pricing information in either "
+            "price_info or capabilities_prices fields."
         )
+
+    # Map job types to capability IDs
+    capability_map = {
+        "lv2v": 35,  # Capability_LiveVideoToVideo
+    }
+    
+    # If price_info is missing or zero, try to populate from capabilities_prices
+    info_to_send = lp_rpc_pb2.OrchestratorInfo()
+    info_to_send.CopyFrom(info)
+    
+    needs_price_from_capability = (
+        not info_to_send.HasField("price_info") or 
+        info_to_send.price_info.pricePerUnit == 0
+    )
+    
+    if needs_price_from_capability and typ in capability_map:
+        target_cap_id = capability_map[typ]
+        # Find the capability price for this job type
+        for cap_price in info_to_send.capabilities_prices:
+            if cap_price.capability == target_cap_id and cap_price.pricePerUnit > 0:
+                # Copy this capability price to price_info for the remote signer
+                info_to_send.price_info.CopyFrom(cap_price)
+                break
 
     base = _normalize_http_or_https_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-    pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
+    pb = lp_rpc_pb2.PaymentResult(info=info_to_send).SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
     data = post_json(url, {"orchestrator": orch_b64, "type": typ})
@@ -387,6 +413,17 @@ def GetPayment(
         raise LivepeerGatewayError(f"GetPayment error: invalid 'segCreds' in response (url={url})")
 
     return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
+
+
+def _start_job_with_headers(
+    info: lp_rpc_pb2.OrchestratorInfo,
+    req: StartJobRequest,
+    headers: dict[str, Optional[str]],
+) -> LiveVideoToVideo:
+    base = _normalize_https_base_url(info.transcoder)
+    url = f"{base}/live-video-to-video"
+    data = post_json(url, req.to_json(), headers=headers)
+    return LiveVideoToVideo.from_json(data)
 
 
 def StartJob(
@@ -405,15 +442,12 @@ def StartJob(
         raise LivepeerGatewayError("StartJob requires model_id")
 
     p = GetPayment(signer_base_url, info)
-    headers: dict[str, str] = {
+    headers: dict[str, Optional[str]] = {
         "Livepeer-Payment": p.payment,
         "Livepeer-Segment": p.seg_creds,
     }
 
-    base = _normalize_https_base_url(info.transcoder)
-    url = f"{base}/live-video-to-video"
-    data = post_json(url, req.to_json(), headers=headers)
-    return LiveVideoToVideo.from_json(data)
+    return _start_job_with_headers(info, req, headers)
 
 
 
@@ -735,6 +769,8 @@ class OrchestratorClient:
 
             msg = details or repr(e)
             raise OrchestratorRpcError(self.orch_url, f"{code}: {msg}", cause=e) from None
+
+
 
 
 def GetOrchestratorInfo(orch_url: str, *, signer_url: Optional[str] = None) -> lp_rpc_pb2.OrchestratorInfo:
