@@ -24,6 +24,7 @@ from . import lp_rpc_pb2_grpc
 from .control import Control
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
+from .media_subscribe import MediaSubscribe
 from .errors import LivepeerGatewayError
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
@@ -209,6 +210,7 @@ class LiveVideoToVideo:
     control: Optional[Control] = None
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
+    _media_subscribe: Optional[MediaSubscribe] = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
@@ -243,6 +245,52 @@ class LiveVideoToVideo:
             )
             object.__setattr__(self, "_media", media)
         return self._media
+
+    def _get_media_subscribe(self) -> MediaSubscribe:
+        if not self.subscribe_url:
+            raise LivepeerGatewayError("No subscribe_url present on this LiveVideoToVideo job")
+        if self._media_subscribe is None:
+            media_sub = MediaSubscribe(self.subscribe_url)
+            object.__setattr__(self, "_media_subscribe", media_sub)
+        return self._media_subscribe
+
+    def media_segments(
+        self,
+        *,
+        start_seq: int = -2,
+        max_retries: int = 5,
+        max_segment_bytes: Optional[int] = None,
+        connection_close: bool = False,
+    ):
+        """
+        Subscribe to media output and yield SegmentReader objects.
+        """
+        return self._get_media_subscribe().segments(
+            start_seq=start_seq,
+            max_retries=max_retries,
+            max_segment_bytes=max_segment_bytes,
+            connection_close=connection_close,
+        )
+
+    def media_bytes(
+        self,
+        *,
+        start_seq: int = -2,
+        max_retries: int = 5,
+        max_segment_bytes: Optional[int] = None,
+        connection_close: bool = False,
+        chunk_size: int = 64 * 1024,
+    ):
+        """
+        Subscribe to media output and yield a continuous byte stream.
+        """
+        return self._get_media_subscribe().bytes(
+            start_seq=start_seq,
+            max_retries=max_retries,
+            max_segment_bytes=max_segment_bytes,
+            connection_close=connection_close,
+            chunk_size=chunk_size,
+        )
 
     async def close(self) -> None:
         """

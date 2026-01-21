@@ -5,6 +5,8 @@ import asyncio
 import logging
 import queue
 import threading
+import sys
+from contextlib import suppress
 from fractions import Fraction
 
 import av
@@ -84,6 +86,11 @@ def _parse_args() -> argparse.Namespace:
             "Supported formats vary by device; common options: uyvy422, yuyv422, nv12."
         ),
     )
+    p.add_argument(
+        "--output",
+        default=None,
+        help="Write subscribed media output to '-' (stdout) or a file path.",
+    )
     return p.parse_args()
 
 
@@ -106,12 +113,29 @@ def _capture_frames(
         frame_queue.put(_STOP)
 
 
+async def _write_media_output(job, output: str) -> None:
+    if output == "-" or output == "stdout":
+        out = sys.stdout.buffer
+        close_out = False
+    else:
+        out = open(output, "wb")
+        close_out = True
+
+    try:
+        async for chunk in job.media_bytes():
+            await asyncio.to_thread(out.write, chunk)
+    finally:
+        if close_out:
+            out.close()
+
+
 async def main() -> None:
     _configure_logging()
     args = _parse_args()
     job = None
     input_ = None
     stop_event = threading.Event()
+    output_task: asyncio.Task[None] | None = None
 
     try:
         info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
@@ -123,9 +147,15 @@ async def main() -> None:
 
         print("=== LiveVideoToVideo ===")
         print("publish_url:", job.publish_url)
+        if args.output:
+            print("subscribe_url:", job.subscribe_url)
         print()
 
         media = job.start_media(MediaPublishConfig(fps=args.fps))
+        if args.output:
+            if not job.subscribe_url:
+                raise LivepeerGatewayError("No subscribe_url present on this LiveVideoToVideo job")
+            output_task = asyncio.create_task(_write_media_output(job, args.output))
 
         av.logging.set_level(av.logging.ERROR)
         input_ = av.open(
@@ -161,6 +191,10 @@ async def main() -> None:
         print(f"Error processing frame ({args.orchestrator}): {e}")
     finally:
         stop_event.set()
+        if output_task is not None:
+            output_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await output_task
         if input_ is not None:
             try:
                 input_.close()

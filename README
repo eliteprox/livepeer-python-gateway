@@ -27,6 +27,12 @@ Capture MacOS camera frames and publish via write_frame
 uv run examples/camera_capture.py
 ```
 
+Capture MacOS camera frames and subscribe to media output (stdout or file)
+```
+uv run examples/camera_capture.py --output - | ffplay -fflags nobuffer -flags low_delay -probesize 32 -i -
+uv run examples/camera_capture.py --output out.ts
+```
+
 Subscribe to a LiveVideoToVideo trickle events channel
 ```
 uv run examples/subscribe_events.py
