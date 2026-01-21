@@ -2,11 +2,43 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import logging
 from pathlib import Path
 from typing import Optional
 
-from livepeer_gateway.trickle_subscriber import TrickleFrameSubscriber
+import av
+
+from livepeer_gateway.trickle_subscriber import SegmentReader, TrickleSubscriber
+
+
+async def _read_all(segment: SegmentReader, *, chunk_size: int = 256 * 1024) -> bytes:
+    parts = []
+    try:
+        while True:
+            chunk = await segment.read(chunk_size=chunk_size)
+            if not chunk:
+                break
+            parts.append(chunk)
+    finally:
+        await segment.close()
+    return b"".join(parts)
+
+
+def _decode_frame_count(segment_bytes: bytes) -> int:
+    """
+    Decode MPEG-TS bytes to count frames for logging progress.
+    """
+    frames = 0
+    container = av.open(io.BytesIO(segment_bytes), format="mpegts")
+    try:
+        for packet in container.demux(video=0):
+            for frame in packet.decode():
+                if isinstance(frame, av.VideoFrame):
+                    frames += 1
+    finally:
+        container.close()
+    return frames
 
 
 async def record_stream(
@@ -23,21 +55,26 @@ async def record_stream(
     frames_total = 0
     segments_total = 0
 
-    subscriber = TrickleFrameSubscriber(publish_url, start_seq=start_seq)
-    async with subscriber:
+    async with TrickleSubscriber(publish_url, start_seq=start_seq) as subscriber:
         with output.open("ab") as outfile:
-            async for seq, data in subscriber.iter_segments():
+            while True:
+                segment = await subscriber.next()
+                if segment is None:
+                    break
+
+                seq = segment.seq()
+                data = await _read_all(segment)
                 await asyncio.to_thread(outfile.write, data)
 
-                frames = subscriber.decode_frames(data)
-                frames_total += len(frames)
+                frames = _decode_frame_count(data)
+                frames_total += frames
                 segments_total += 1
 
                 logging.info(
                     "seq=%s wrote=%s bytes frames=%s total_frames=%s",
                     seq,
                     len(data),
-                    len(frames),
+                    frames,
                     frames_total,
                 )
 

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import io
 import os
 import time
 from pathlib import Path
@@ -10,7 +11,7 @@ import av
 from livepeer_gateway.media_publish import MediaPublishConfig
 from livepeer_gateway.orchestrator import LivepeerGatewayError, StartJobRequest
 from livepeer_gateway.orchestrator_session import OrchestratorSession
-from livepeer_gateway.trickle_subscriber import TrickleFrameSubscriber
+from livepeer_gateway.trickle_subscriber import SegmentReader, TrickleSubscriber
 
 
 def _parse_args() -> argparse.Namespace:
@@ -91,6 +92,32 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _decode_frame_count(segment_bytes: bytes) -> int:
+    frames = 0
+    container = av.open(io.BytesIO(segment_bytes), format="mpegts")
+    try:
+        for packet in container.demux(video=0):
+            for frame in packet.decode():
+                if isinstance(frame, av.VideoFrame):
+                    frames += 1
+    finally:
+        container.close()
+    return frames
+
+
+async def _read_all(segment: SegmentReader, *, chunk_size: int = 256 * 1024) -> bytes:
+    parts = []
+    try:
+        while True:
+            chunk = await segment.read(chunk_size=chunk_size)
+            if not chunk:
+                break
+            parts.append(chunk)
+    finally:
+        await segment.close()
+    return b"".join(parts)
+
+
 async def _publish_file(
     path: str,
     media,
@@ -146,15 +173,19 @@ async def _record_trickle(
     """
     Record trickle segments to disk while optionally decoding frames for progress.
     """
-    subscriber = TrickleFrameSubscriber(publish_url, start_seq=start_seq)
     segments = 0
     frames = 0
 
-    async with subscriber:
+    async with TrickleSubscriber(publish_url, start_seq=start_seq) as subscriber:
         with output.open("ab") as outfile:
-            async for seq, data in subscriber.iter_segments():
+            while True:
+                segment = await subscriber.next()
+                if segment is None:
+                    break
+                seq = segment.seq()
+                data = await _read_all(segment)
                 await asyncio.to_thread(outfile.write, data)
-                frames += len(subscriber.decode_frames(data))
+                frames += _decode_frame_count(data)
                 segments += 1
                 print(f"[record] seq={seq} bytes={len(data)} frames_total={frames}")
                 if max_segments is not None and segments >= max_segments:

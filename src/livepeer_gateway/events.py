@@ -7,7 +7,7 @@ from contextlib import suppress
 from typing import Any, AsyncIterator, Optional
 
 from .errors import LivepeerGatewayError
-from .trickle_subscriber import TrickleSubscriber
+from .trickle_subscriber import TrickleSubscriber, SegmentReader
 
 
 class Events:
@@ -33,7 +33,7 @@ class Events:
         """
         url = self.events_url
 
-        async def _read_all(segment: "SegmentReader", *, chunk_size: int = 33 * 1024) -> bytes:
+        async def _read_all(segment: SegmentReader, *, chunk_size: int = 33 * 1024) -> bytes:
             parts = []
             try:
                 while True:
