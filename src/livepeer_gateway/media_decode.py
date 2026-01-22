@@ -40,7 +40,10 @@ _EOF = object()
 _END = object()
 
 
-class _QueuedBytesReader:
+# Internal adapter that turns async-fed byte chunks into a blocking, file-like
+# stream for PyAV. It also carries segment sequence markers so decoded frames
+# can be annotated with the source segment.
+class _BlockingByteStream:
     def __init__(self) -> None:
         self._queue: "queue.Queue[object]" = queue.Queue()
         self._buffer = bytearray()
@@ -48,20 +51,24 @@ class _QueuedBytesReader:
         self._current_seq: Optional[int] = None
 
     def feed(self, data: bytes) -> None:
+        # Called from the async producer to enqueue raw bytes for decoding.
         if not data:
             return
         self._queue.put(data)
 
     def mark_seq(self, seq: Optional[int]) -> None:
+        # Marker inserted when a new segment starts (best-effort attribution).
         self._queue.put(_SegmentMarker(seq))
 
     def close(self) -> None:
+        # Signal EOF to the blocking reader.
         self._queue.put(_EOF)
 
     def current_seq(self) -> Optional[int]:
         return self._current_seq
 
     def read(self, size: int = -1) -> bytes:
+        # Blocking read interface consumed by PyAV demuxer.
         if size is None or size < 0:
             size = 64 * 1024
 
@@ -159,7 +166,7 @@ def _build_decoded_frame(
 
 class MpegTsDecoder:
     def __init__(self) -> None:
-        self._reader = _QueuedBytesReader()
+        self._reader = _BlockingByteStream()
         self._output: "queue.Queue[object]" = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="MpegTsDecoder", daemon=True)
