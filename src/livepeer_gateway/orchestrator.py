@@ -29,6 +29,8 @@ from .errors import LivepeerGatewayError
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
 
+CAPABILITY_LIVE_VIDEO_TO_VIDEO = 35
+
 def _truncate(s: str, max_len: int = 2000) -> str:
     if len(s) <= max_len:
         return s
@@ -206,7 +208,7 @@ def _build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb
             constraints = caps.constraints
             per_cap = getattr(constraints, "PerCapability", None) or getattr(constraints, "per_capability", None)
             if per_cap is None:
-                per_cap = constraints.PerCapability  # type: ignore[attr-defined]
+                per_cap = constraints.PerCapability
             per_cap[capability].models[constraint].warm = False
     return caps
 
@@ -227,7 +229,7 @@ def _select_price_info(
         # Capability 35 corresponds to Live video to video.
         for pi in info.capabilities_prices:
             if (
-                pi.capability == 35
+                pi.capability == CAPABILITY_LIVE_VIDEO_TO_VIDEO
                 and pi.pricePerUnit > 0
                 and pi.pixelsPerUnit > 0
                 and pi.constraint == model_id
@@ -417,7 +419,7 @@ def GetPayment(
 
     capability = price_info.capability
     if typ == "lv2v" and capability == 0:
-        capability = 35
+        capability = CAPABILITY_LIVE_VIDEO_TO_VIDEO
     constraint = price_info.constraint or (model_id or "")
 
     payload = {

@@ -14,7 +14,7 @@ from livepeer_gateway.orchestrator_session import OrchestratorSession
 from livepeer_gateway.trickle_subscriber import SegmentReader, TrickleSubscriber
 
 DEFAULT_ORCH = "https://localhost:8935"
-DEFAULT_MODEL_ID = "noop" # fix
+DEFAULT_MODEL_ID = "noop"
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(

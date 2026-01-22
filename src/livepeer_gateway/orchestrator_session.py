@@ -14,6 +14,7 @@ from .orchestrator import (
     StartJobRequest,
     _start_job_with_headers,
     _build_capabilities,
+    CAPABILITY_LIVE_VIDEO_TO_VIDEO,
 )
 
 
@@ -80,7 +81,7 @@ class OrchestratorSession:
         """
         caps = None
         if typ == "lv2v" and model_id:
-            caps = _build_capabilities(35, model_id)
+            caps = _build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, model_id)
         info = self.ensure_info(force=bool(caps), caps=caps)
         try:
             return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
@@ -99,10 +100,7 @@ class OrchestratorSession:
         """
         Start a job using cached/refreshable OrchestratorInfo and payment.
         """
-        # NOTE: TODO: Improve for end users—when using live-video-to-video,
-        # we have to translate to the internal capability id (35) manually with _build_capabilities,
-        # rather than using a more user-friendly interface or enum.
-        caps = _build_capabilities(35, req.model_id) if req.model_id else None
+        caps = _build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, req.model_id) if req.model_id else None
         info = self.ensure_info(force=bool(caps), caps=caps)
         payment = self.get_payment(typ=typ, model_id=req.model_id)
         headers: dict[str, Optional[str]] = {
