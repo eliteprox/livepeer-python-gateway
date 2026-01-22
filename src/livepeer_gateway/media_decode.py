@@ -20,7 +20,6 @@ class DecodedMediaFrame:
     pts_time: Optional[float]
     demuxed_at: float
     decoded_at: float
-    source_segment_seq: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -38,20 +37,12 @@ class AudioDecodedMediaFrame(DecodedMediaFrame):
     samples: Optional[int]
 
 
-class _SegmentMarker:
-    __slots__ = ("seq",)
-
-    def __init__(self, seq: Optional[int]) -> None:
-        self.seq = seq
-
-
 _EOF = object()
 _END = object()
 
 
 # Internal adapter that turns async-fed byte chunks into a blocking, file-like
-# stream for PyAV. It also carries segment sequence markers so decoded frames
-# can be annotated with the source segment.
+# stream for PyAV.
 class _BlockingByteStream:
     def __init__(self) -> None:
         # TODO: add backpressure (bounded queue + blocking feed) to avoid unbounded
@@ -59,7 +50,6 @@ class _BlockingByteStream:
         self._queue: "queue.Queue[object]" = queue.Queue()
         self._buffer = bytearray()
         self._closed = False
-        self._current_seq: Optional[int] = None
 
     def feed(self, data: bytes) -> None:
         # Called from the async producer to enqueue raw bytes for decoding.
@@ -67,16 +57,9 @@ class _BlockingByteStream:
             return
         self._queue.put(data)
 
-    def mark_seq(self, seq: Optional[int]) -> None:
-        # Marker inserted when a new segment starts (best-effort attribution).
-        self._queue.put(_SegmentMarker(seq))
-
     def close(self) -> None:
         # Signal EOF to the blocking reader.
         self._queue.put(_EOF)
-
-    def current_seq(self) -> Optional[int]:
-        return self._current_seq
 
     def read(self, size: int = -1) -> bytes:
         # Blocking read interface consumed by PyAV demuxer.
@@ -95,9 +78,6 @@ class _BlockingByteStream:
             if item is _EOF:
                 self._closed = True
                 break
-            if isinstance(item, _SegmentMarker):
-                self._current_seq = item.seq
-                continue
             if not item:
                 continue
             self._buffer.extend(item)  # type: ignore[arg-type]
@@ -145,7 +125,6 @@ def _build_decoded_frame(
     *,
     demuxed_at: float,
     decoded_at: float,
-    source_segment_seq: Optional[int],
 ) -> AudioDecodedMediaFrame | VideoDecodedMediaFrame:
     pts = frame.pts
     time_base = _fraction_from_time_base(frame.time_base) if frame.time_base is not None else None
@@ -160,7 +139,6 @@ def _build_decoded_frame(
             pts_time=pts_time,
             demuxed_at=demuxed_at,
             decoded_at=decoded_at,
-            source_segment_seq=source_segment_seq,
             width=frame.width,
             height=frame.height,
             pix_fmt=frame.format.name if frame.format else None,
@@ -174,7 +152,6 @@ def _build_decoded_frame(
         pts_time=pts_time,
         demuxed_at=demuxed_at,
         decoded_at=decoded_at,
-        source_segment_seq=source_segment_seq,
         sample_rate=frame.sample_rate,
         layout=frame.layout.name if frame.layout else None,
         format=frame.format.name if frame.format else None,
@@ -195,9 +172,6 @@ class MpegTsDecoder:
 
     def feed(self, data: bytes) -> None:
         self._reader.feed(data)
-
-    def mark_seq(self, seq: Optional[int]) -> None:
-        self._reader.mark_seq(seq)
 
     def close(self) -> None:
         self._reader.close()
@@ -233,7 +207,6 @@ class MpegTsDecoder:
                         frame,
                         demuxed_at=demuxed_at,
                         decoded_at=decoded_at,
-                        source_segment_seq=self._reader.current_seq(),
                     )
                     self._output.put(decoded)
         except Exception as e:

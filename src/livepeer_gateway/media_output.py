@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import AsyncIterator, Optional, Tuple
+from typing import AsyncIterator, Optional
 
 from .errors import LivepeerGatewayError
 from .media_decode import (
@@ -77,8 +77,7 @@ class MediaOutput:
         """
 
         async def _iter() -> AsyncIterator[bytes]:
-            async for chunk, _, _ in self._iter_bytes_with_meta(
-            ):
+            async for chunk in self._iter_bytes():
                 yield chunk
 
         return _iter()
@@ -96,10 +95,7 @@ class MediaOutput:
             decoder.start()
 
             async def _feed() -> None:
-                async for chunk, seq, is_first in self._iter_bytes_with_meta(
-                ):
-                    if is_first:
-                        decoder.mark_seq(seq)
+                async for chunk in self._iter_bytes():
                     decoder.feed(chunk)
                 decoder.close()
 
@@ -130,24 +126,21 @@ class MediaOutput:
 
         return _iter()
 
-    async def _iter_bytes_with_meta(
+    async def _iter_bytes(
         self,
-    ) -> AsyncIterator[Tuple[bytes, Optional[int], bool]]:
+    ) -> AsyncIterator[bytes]:
         checked_content_type = False
         async for segment in self.segments(
         ):
             if not checked_content_type:
                 _require_mpegts_content_type(segment.headers().get("Content-Type"))
                 checked_content_type = True
-            seq = segment.seq()
-            first_chunk = True
             try:
                 while True:
                     chunk = await segment.read(chunk_size=self.chunk_size)
                     if not chunk:
                         break
-                    yield chunk, seq, first_chunk
-                    first_chunk = False
+                    yield chunk
             finally:
                 await segment.close()
 

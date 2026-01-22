@@ -62,7 +62,6 @@ async def main() -> None:
                 "time_base": str(frame.time_base) if frame.time_base else None,
                 "demuxed_at": frame.demuxed_at,
                 "decoded_at": frame.decoded_at,
-                "source_segment_seq": frame.source_segment_seq,
             }
             if frame.kind == "video":
                 payload.update(
