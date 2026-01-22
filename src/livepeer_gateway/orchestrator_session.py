@@ -13,6 +13,7 @@ from .orchestrator import (
     OrchestratorClient,
     StartJobRequest,
     _start_job_with_headers,
+    _build_capabilities,
 )
 
 
@@ -52,36 +53,41 @@ class OrchestratorSession:
         self._info = None
         self._info_fetched_at = None
 
-    def ensure_info(self, *, force: bool = False) -> lp_rpc_pb2.OrchestratorInfo:
+    def ensure_info(
+        self, *, force: bool = False, caps: Optional[lp_rpc_pb2.Capabilities] = None
+    ) -> lp_rpc_pb2.OrchestratorInfo:
         """
         Return cached OrchestratorInfo, refreshing if missing/expired or forced.
         """
-        if not force and self._is_info_valid():
+        if not force and caps is None and self._is_info_valid():
             assert self._info is not None
             return self._info
 
-        info = self._client.GetOrchestratorInfo()
+        info = self._client.GetOrchestratorInfo(caps=caps)
         self._info = info
         self._info_fetched_at = time.monotonic()
         return info
 
-    def refresh(self) -> lp_rpc_pb2.OrchestratorInfo:
+    def refresh(self, *, caps: Optional[lp_rpc_pb2.Capabilities] = None) -> lp_rpc_pb2.OrchestratorInfo:
         """
         Force refresh of orchestrator info regardless of cache age.
         """
-        return self.ensure_info(force=True)
+        return self.ensure_info(force=True, caps=caps)
 
     def get_payment(self, *, typ: str = "lv2v", model_id: Optional[str] = None) -> GetPaymentResponse:
         """
         Fetch payment credentials, refreshing orchestrator info once on failure.
         """
-        info = self.ensure_info()
+        caps = None
+        if typ == "lv2v" and model_id:
+            caps = _build_capabilities(35, model_id)
+        info = self.ensure_info(force=bool(caps), caps=caps)
         try:
             return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
         except LivepeerGatewayError:
             # Retry once with a fresh OrchestratorInfo (e.g., if price/auth changed).
             self.invalidate()
-            info = self.ensure_info(force=True)
+            info = self.ensure_info(force=True, caps=caps)
             return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
 
     def start_job(
@@ -93,7 +99,11 @@ class OrchestratorSession:
         """
         Start a job using cached/refreshable OrchestratorInfo and payment.
         """
-        info = self.ensure_info()
+        # NOTE: TODO: Improve for end users—when using live-video-to-video,
+        # we have to translate to the internal capability id (35) manually with _build_capabilities,
+        # rather than using a more user-friendly interface or enum.
+        caps = _build_capabilities(35, req.model_id) if req.model_id else None
+        info = self.ensure_info(force=bool(caps), caps=caps)
         payment = self.get_payment(typ=typ, model_id=req.model_id)
         headers: dict[str, Optional[str]] = {
             "Livepeer-Payment": payment.payment,

@@ -193,6 +193,66 @@ def _normalize_https_signer_origin(url: str) -> str:
     return _normalize_https_base_url(url, allow_http=allow_http, keep_path=True)
 
 
+def _build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb2.Capabilities:
+    """
+    Build a capabilities message with an optional constraint for a specific capability.
+    """
+    caps = lp_rpc_pb2.Capabilities()
+    if capability:
+        caps.capacities[capability] = 1
+        if constraint:
+            if not caps.HasField("constraints"):
+                caps.constraints.CopyFrom(lp_rpc_pb2.Capabilities.Constraints())
+            constraints = caps.constraints
+            per_cap = getattr(constraints, "PerCapability", None) or getattr(constraints, "per_capability", None)
+            if per_cap is None:
+                per_cap = constraints.PerCapability  # type: ignore[attr-defined]
+            per_cap[capability].models[constraint].warm = False
+    return caps
+
+
+def _select_price_info(
+    info: lp_rpc_pb2.OrchestratorInfo, *, typ: str, model_id: Optional[str]
+) -> lp_rpc_pb2.PriceInfo:
+    """
+    Choose the price info to use for a payment request.
+
+    For LV2V, prefer a capability-scoped price that matches the requested model ID.
+    Fallback to the general price_info only if no matching capability price exists.
+    """
+    if typ == "lv2v":
+        if not model_id:
+            raise LivepeerGatewayError("GetPayment requires model_id for LV2V pricing.")
+
+        # Capability 35 corresponds to Live video to video.
+        for pi in info.capabilities_prices:
+            if (
+                pi.capability == 35
+                and pi.pricePerUnit > 0
+                and pi.pixelsPerUnit > 0
+                and pi.constraint == model_id
+            ):
+                return pi
+
+        # No matching capability price; fall back to general price if valid.
+        if info.HasField("price_info") and info.price_info.pricePerUnit > 0 and info.price_info.pixelsPerUnit > 0:
+            return info.price_info
+
+        raise LivepeerGatewayError(
+            f"No capability price found for LV2V model_id={model_id}; orchestrator did not return usable pricing."
+        )
+
+    # Non-LV2V: use general price_info first, otherwise any valid capability price.
+    if info.HasField("price_info") and info.price_info.pricePerUnit > 0 and info.price_info.pixelsPerUnit > 0:
+        return info.price_info
+
+    for pi in info.capabilities_prices:
+        if pi.pricePerUnit > 0 and pi.pixelsPerUnit > 0:
+            return pi
+
+    raise LivepeerGatewayError("Orchestrator did not return usable pricing information.")
+
+
 @dataclass(frozen=True)
 class StartJobRequest:
     # The ID of the Gateway request (for logging purposes).
@@ -325,7 +385,7 @@ def GetPayment(
 
     POST {signer_base_url}/generate-live-payment with:
       orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-      type: job type (default: lv2v)
+      priceInfo: pricing selected by the gateway (capability + constraint/model)
     """
 
     if typ == "lv2v" and not model_id:
@@ -345,17 +405,7 @@ def GetPayment(
         return GetPaymentResponse(seg_creds=seg, payment="")
 
     # Verify there's some pricing available (either price_info or capabilities_prices).
-    # The remote signer will look up the correct price from capabilities_prices
-    # using the (capability, constraint/model_id) pair.
-    has_general_price = info.HasField("price_info") and info.price_info.pricePerUnit > 0
-    has_capability_prices = bool(info.capabilities_prices)
-    
-    if not has_general_price and not has_capability_prices:
-        raise LivepeerGatewayError(
-            "Price info required when using remote signer. "
-            "The orchestrator returned no pricing information in either "
-            "price_info or capabilities_prices fields."
-        )
+    price_info = _select_price_info(info, typ=typ, model_id=model_id)
 
     base = _normalize_https_signer_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
@@ -365,9 +415,20 @@ def GetPayment(
     pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
-    payload = {"orchestrator": orch_b64, "type": typ}
-    if model_id:
-        payload["modelID"] = model_id
+    capability = price_info.capability
+    if typ == "lv2v" and capability == 0:
+        capability = 35
+    constraint = price_info.constraint or (model_id or "")
+
+    payload = {
+        "orchestrator": orch_b64,
+        "priceInfo": {
+            "pricePerUnit": price_info.pricePerUnit,
+            "pixelsPerUnit": price_info.pixelsPerUnit,
+            "capability": capability,
+            "constraint": constraint,
+        },
+    }
     data = post_json(url, payload)
 
     payment = data.get("payment")
@@ -695,7 +756,7 @@ class OrchestratorClient:
         self._channel = grpc.secure_channel(target, credentials, options=options)
         self._stub = lp_rpc_pb2_grpc.OrchestratorStub(self._channel)
 
-    def GetOrchestratorInfo(self) -> lp_rpc_pb2.OrchestratorInfo:
+    def GetOrchestratorInfo(self, *, caps: Optional[lp_rpc_pb2.Capabilities] = None) -> lp_rpc_pb2.OrchestratorInfo:
         """
         Wrapper for the Orchestrator RPC method GetOrchestrator(...)
         but exposed as GetOrchestratorInfo() for convenience.
@@ -713,6 +774,7 @@ class OrchestratorClient:
         request = lp_rpc_pb2.OrchestratorRequest(
             address=signer.address,
             sig=signer.sig,
+            capabilities=caps,
             ignoreCapacityCheck=True,
         )
 
@@ -738,14 +800,19 @@ class OrchestratorClient:
 
 
 
-def GetOrchestratorInfo(orch_url: str, *, signer_url: Optional[str] = None) -> lp_rpc_pb2.OrchestratorInfo:
+def GetOrchestratorInfo(
+    orch_url: str,
+    *,
+    signer_url: Optional[str] = None,
+    caps: Optional[lp_rpc_pb2.Capabilities] = None,
+) -> lp_rpc_pb2.OrchestratorInfo:
     """
     Public functional API:
         GetOrchestratorInfo(orch_url, signer_url=...)
     Remote signer is called once per process (cached).
     Always uses secure channel (TLS) with certificate verification disabled.
     """
-    return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo()
+    return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo(caps=caps)
 
 
 @dataclass
