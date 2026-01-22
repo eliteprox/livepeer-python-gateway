@@ -24,7 +24,7 @@ from . import lp_rpc_pb2_grpc
 from .control import Control
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
-from .media_subscribe import MediaSubscribe
+from .media_output import MediaOutput
 from .errors import LivepeerGatewayError
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
@@ -136,43 +136,61 @@ def post_json(
     return data
 
 
-def _normalize_https_base_url(orch_url: str) -> str:
+def _normalize_https_base_url(
+    orch_url: str,
+    *,
+    allow_http: bool = False,
+    keep_path: bool = False,
+) -> str:
     """
-    Normalize an orchestrator base URL to an https:// URL with no path/query/fragment.
+    Normalize a URL to scheme://host[:port][/<path>] with an https default.
 
     Accepts:
     - "host:port" (implicitly treated as https://host:port)
-    - "https://host:port"
+    - "https://host:port[/path]"
+    - "http://host:port[/path]" (only if allow_http=True)
     """
     orch_url = orch_url.strip().rstrip("/")
-    url = orch_url if "://" in orch_url else f"https://{orch_url}"
+    default_scheme = "http" if (allow_http and "://" not in orch_url) else "https"
+    url = orch_url if "://" in orch_url else f"{default_scheme}://{orch_url}"
 
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
+    allowed_schemes = ("https", "http") if allow_http else ("https",)
+    if parsed.scheme not in allowed_schemes:
+        raise ValueError(f"Only https:// URLs are supported (got {parsed.scheme!r})")
     if not parsed.netloc:
-        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
-    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
-        raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
-    return f"https://{parsed.netloc}"
+        raise ValueError(f"Invalid https URL: {orch_url!r}")
+
+    if not keep_path:
+        if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+            raise ValueError(f"URL must not include a path/query/fragment: {orch_url!r}")
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    # keep_path=True: allow a path prefix, but drop params/query/fragment
+    path = parsed.path or ""
+    if not path or path == "/":
+        path = ""
+    else:
+        path = "/" + path.lstrip("/").rstrip("/")
+
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
-def _normalize_https_origin(url: str) -> str:
+def _normalize_https_signer_origin(url: str) -> str:
     """
-    Normalize a URL (possibly with a path) into an https:// origin (scheme + host:port).
+    Normalize a signer URL (optionally with a path prefix) into scheme://host[:port][/<path>].
 
     Accepts:
     - "host:port" (implicitly https://host:port)
-    - "https://host:port[/...]" (path/query/fragment are ignored)
+    - "https://host:port[/...]" (path preserved, query/fragment dropped)
+    - "http://host:port[/...]" (only if ALLOW_HTTP_SIGNER env var is set)
     """
     url = url.strip()
-    u = url if "://" in url else f"https://{url}"
-    parsed = urlparse(u)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// URLs are supported (got {parsed.scheme!r})")
-    if not parsed.netloc:
-        raise ValueError(f"Invalid https URL: {url!r}")
-    return f"https://{parsed.netloc}"
+
+    # Check if the env var is set to allow http signer urls
+    allow_http = os.getenv("ALLOW_HTTP_SIGNER", "").strip().lower() in ("1", "true")
+
+    return _normalize_https_base_url(url, allow_http=allow_http, keep_path=True)
 
 
 @dataclass(frozen=True)
@@ -210,7 +228,6 @@ class LiveVideoToVideo:
     control: Optional[Control] = None
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
-    _media_subscribe: Optional[MediaSubscribe] = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
@@ -246,33 +263,7 @@ class LiveVideoToVideo:
             object.__setattr__(self, "_media", media)
         return self._media
 
-    def _get_media_subscribe(self) -> MediaSubscribe:
-        if not self.subscribe_url:
-            raise LivepeerGatewayError("No subscribe_url present on this LiveVideoToVideo job")
-        if self._media_subscribe is None:
-            media_sub = MediaSubscribe(self.subscribe_url)
-            object.__setattr__(self, "_media_subscribe", media_sub)
-        return self._media_subscribe
-
-    def media_segments(
-        self,
-        *,
-        start_seq: int = -2,
-        max_retries: int = 5,
-        max_segment_bytes: Optional[int] = None,
-        connection_close: bool = False,
-    ):
-        """
-        Subscribe to media output and yield SegmentReader objects.
-        """
-        return self._get_media_subscribe().segments(
-            start_seq=start_seq,
-            max_retries=max_retries,
-            max_segment_bytes=max_segment_bytes,
-            connection_close=connection_close,
-        )
-
-    def media_bytes(
+    def media_output(
         self,
         *,
         start_seq: int = -2,
@@ -280,17 +271,24 @@ class LiveVideoToVideo:
         max_segment_bytes: Optional[int] = None,
         connection_close: bool = False,
         chunk_size: int = 64 * 1024,
-    ):
+    ) -> MediaOutput:
         """
-        Subscribe to media output and yield a continuous byte stream.
+        Convenience helper to create a `MediaOutput` for this job.
+
+        This uses `subscribe_url` from the job response and raises if missing.
+        Subscription tuning is configured once here (and stored on the returned `MediaOutput`).
         """
-        return self._get_media_subscribe().bytes(
+        if not self.subscribe_url:
+            raise LivepeerGatewayError("No subscribe_url present on this LiveVideoToVideo job")
+        return MediaOutput(
+            self.subscribe_url,
             start_seq=start_seq,
             max_retries=max_retries,
             max_segment_bytes=max_segment_bytes,
             connection_close=connection_close,
             chunk_size=chunk_size,
         )
+
 
     async def close(self) -> None:
         """
@@ -359,7 +357,7 @@ def GetPayment(
             "price_info or capabilities_prices fields."
         )
 
-    base = _normalize_https_base_url(signer_base_url)
+    base = _normalize_https_signer_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
@@ -610,7 +608,7 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
     # Normalize to an https:// origin and append the expected path.
-    signer_url = f"{_normalize_https_origin(signer_base_url)}/sign-orchestrator-info"
+    signer_url = f"{_normalize_https_signer_origin(signer_base_url)}/sign-orchestrator-info"
 
     try:
         # Some signers accept/expect POST with an empty JSON object.
