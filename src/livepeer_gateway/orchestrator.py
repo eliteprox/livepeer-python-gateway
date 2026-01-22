@@ -340,6 +340,7 @@ def GetPayment(
     info: lp_rpc_pb2.OrchestratorInfo,
     *,
     typ: str = "lv2v",
+    model_id: Optional[str] = None,
 ) -> GetPaymentResponse:
     """
     Call the remote signer to generate an automatic payment for a job.
@@ -348,6 +349,11 @@ def GetPayment(
       orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
       type: job type (default: lv2v)
     """
+
+    if typ == "lv2v" and not model_id:
+        raise LivepeerGatewayError(
+            "GetPayment requires model_id when requesting LV2V payments."
+        )
 
     if not signer_base_url:
         # Offchain mode: still send the expected headers, but with empty content.
@@ -360,49 +366,31 @@ def GetPayment(
         seg = base64.b64encode(seg.SerializeToString()).decode("ascii")
         return GetPaymentResponse(seg_creds=seg, payment="")
 
-    # Price info must be present (can be zero for free/test services)
-    # Check if either price_info or capabilities_prices is provided
-    has_general_price_structure = info.HasField("price_info")
-    has_capability_price_structure = bool(info.capabilities_prices)
+    # Verify there's some pricing available (either price_info or capabilities_prices).
+    # The remote signer will look up the correct price from capabilities_prices
+    # using the (capability, constraint/model_id) pair.
+    has_general_price = info.HasField("price_info") and info.price_info.pricePerUnit > 0
+    has_capability_prices = bool(info.capabilities_prices)
     
-    if not has_general_price_structure and not has_capability_price_structure:
+    if not has_general_price and not has_capability_prices:
         raise LivepeerGatewayError(
             "Price info required when using remote signer. "
             "The orchestrator returned no pricing information in either "
             "price_info or capabilities_prices fields."
         )
 
-    # Map job types to capability IDs
-    capability_map = {
-        "lv2v": 35,  # Capability_LiveVideoToVideo
-    }
-    
-    # If price_info is missing or zero, try to populate from capabilities_prices
-    info_to_send = lp_rpc_pb2.OrchestratorInfo()
-    info_to_send.CopyFrom(info)
-    
-    needs_price_from_capability = (
-        not info_to_send.HasField("price_info") or 
-        info_to_send.price_info.pricePerUnit == 0
-    )
-    
-    if needs_price_from_capability and typ in capability_map:
-        target_cap_id = capability_map[typ]
-        # Find the capability price for this job type
-        for cap_price in info_to_send.capabilities_prices:
-            if cap_price.capability == target_cap_id and cap_price.pricePerUnit > 0:
-                # Copy this capability price to price_info for the remote signer
-                info_to_send.price_info.CopyFrom(cap_price)
-                break
-
     base = _normalize_http_or_https_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-    pb = lp_rpc_pb2.PaymentResult(info=info_to_send).SerializeToString()
+    # The full info is sent including capabilities_prices so the signer can look up pricing
+    pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
-    data = post_json(url, {"orchestrator": orch_b64, "type": typ})
+    payload = {"orchestrator": orch_b64, "type": typ}
+    if model_id:
+        payload["modelID"] = model_id
+    data = post_json(url, payload)
 
     payment = data.get("payment")
     if not isinstance(payment, str) or not payment:
@@ -441,7 +429,7 @@ def StartJob(
     if not req.model_id:
         raise LivepeerGatewayError("StartJob requires model_id")
 
-    p = GetPayment(signer_base_url, info)
+    p = GetPayment(signer_base_url, info, model_id=req.model_id)
     headers: dict[str, Optional[str]] = {
         "Livepeer-Payment": p.payment,
         "Livepeer-Segment": p.seg_creds,

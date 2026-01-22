@@ -71,18 +71,18 @@ class OrchestratorSession:
         """
         return self.ensure_info(force=True)
 
-    def get_payment(self, *, typ: str = "lv2v") -> GetPaymentResponse:
+    def get_payment(self, *, typ: str = "lv2v", model_id: Optional[str] = None) -> GetPaymentResponse:
         """
         Fetch payment credentials, refreshing orchestrator info once on failure.
         """
         info = self.ensure_info()
         try:
-            return GetPayment(self._signer_url, info, typ=typ)
+            return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
         except LivepeerGatewayError:
             # Retry once with a fresh OrchestratorInfo (e.g., if price/auth changed).
             self.invalidate()
             info = self.ensure_info(force=True)
-            return GetPayment(self._signer_url, info, typ=typ)
+            return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
 
     def start_job(
         self,
@@ -94,7 +94,7 @@ class OrchestratorSession:
         Start a job using cached/refreshable OrchestratorInfo and payment.
         """
         info = self.ensure_info()
-        payment = self.get_payment(typ=typ)
+        payment = self.get_payment(typ=typ, model_id=req.model_id)
         headers: dict[str, Optional[str]] = {
             "Livepeer-Payment": payment.payment,
             "Livepeer-Segment": payment.seg_creds,
