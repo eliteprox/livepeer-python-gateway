@@ -15,7 +15,7 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Fetch orchestrator info via Livepeer gRPC.")
     p.add_argument(
         "orchestrators",
-        nargs="*",
+        nargs="+",
         default=[DEFAULT_ORCH],
         help=f"One or more orchestrator gRPC targets (host:port). Default: {DEFAULT_ORCH}",
     )
@@ -24,6 +24,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Remote signer base URL (no path). If omitted, runs in offchain mode.",
     )
+
     return p.parse_args()
 
 def main() -> None:

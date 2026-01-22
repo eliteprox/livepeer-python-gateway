@@ -13,14 +13,17 @@ from livepeer_gateway.orchestrator import LivepeerGatewayError, StartJobRequest
 from livepeer_gateway.orchestrator_session import OrchestratorSession
 from livepeer_gateway.trickle_subscriber import SegmentReader, TrickleSubscriber
 
+DEFAULT_ORCH = "https://localhost:8935"
+DEFAULT_MODEL_ID = "noop" # fix
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Fetch orchestrator info, fetch job token, start a job, and publish frames from a file."
     )
     p.add_argument(
-        "--orchestrator",
-        required=True,
+        "orchestrator",
+        nargs="?",
+        default=DEFAULT_ORCH,
         help="Orchestrator gRPC target (host:port).",
     )
     p.add_argument(
@@ -30,7 +33,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--model-id",
-        required=True,
+        default=DEFAULT_MODEL_ID,
         help="Pipeline model_id to start via /live-video-to-video.",
     )
     p.add_argument(
