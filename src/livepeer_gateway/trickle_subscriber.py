@@ -203,6 +203,9 @@ class SegmentReader:
     def eos(self) -> bool:
         return self.response.headers.get("Lp-Trickle-Closed") is not None
 
+    def content_type(self) -> Optional[str]:
+        return self.response.headers.get("Content-Type")
+
     async def read(self, chunk_size: int = 32 * 1024) -> Optional[bytes]:
         """Read the next chunk of the segment."""
         if not self.response:

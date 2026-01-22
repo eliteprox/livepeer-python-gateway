@@ -2,6 +2,7 @@ from .control import Control
 from .errors import LivepeerGatewayError
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
+from .media_decode import DecodedMediaFrame
 from .media_subscribe import MediaSubscribe
 from .orchestrator import GetOrchestratorInfo, LiveVideoToVideo, StartJob, StartJobRequest
 from .trickle_publisher import TricklePublisher
@@ -15,6 +16,7 @@ __all__ = [
     "MediaPublish",
     "MediaPublishConfig",
     "MediaSubscribe",
+    "DecodedMediaFrame",
     "Events",
     "StartJob",
     "StartJobRequest",

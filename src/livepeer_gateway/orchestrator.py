@@ -292,6 +292,26 @@ class LiveVideoToVideo:
             chunk_size=chunk_size,
         )
 
+    def media_frames(
+        self,
+        *,
+        start_seq: int = -2,
+        max_retries: int = 5,
+        max_segment_bytes: Optional[int] = None,
+        connection_close: bool = False,
+        chunk_size: int = 64 * 1024,
+    ):
+        """
+        Subscribe to media output, decode MPEG-TS, and yield raw frames.
+        """
+        return self._get_media_subscribe().frames(
+            start_seq=start_seq,
+            max_retries=max_retries,
+            max_segment_bytes=max_segment_bytes,
+            connection_close=connection_close,
+            chunk_size=chunk_size,
+        )
+
     async def close(self) -> None:
         """
         Close any nested helpers (control, media, etc) best-effort.
