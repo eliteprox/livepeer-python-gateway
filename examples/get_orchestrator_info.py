@@ -14,7 +14,7 @@ DEFAULT_ORCH = "localhost:8935"
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Fetch orchestrator info via Livepeer gRPC.")
     p.add_argument(
-        "--orchestrators",
+        "orchestrators",
         nargs="*",
         default=[DEFAULT_ORCH],
         help=f"One or more orchestrator gRPC targets (host:port). Default: {DEFAULT_ORCH}",
