@@ -25,6 +25,7 @@ class TricklePublisher:
         self.mime_type = mime_type
         self.connection_close = connection_close
         self.seq = 0
+        self._error: Optional[BaseException] = None
 
         # Lazily initialized async runtime bits (safe to construct in sync code).
         self._lock: Optional[asyncio.Lock] = None
@@ -81,9 +82,11 @@ class TricklePublisher:
             if resp.status != 200:
                 body = await resp.text()
                 logging.error("Trickle POST failed url=%s status=%s body=%r", url, resp.status, body)
+                self._error = RuntimeError(f"Trickle POST failed: status={resp.status} body={body!r}")
             await resp.release()
         except Exception:
             logging.error("Trickle POST exception url=%s", url, exc_info=True)
+            self._error = RuntimeError("Trickle POST exception")
 
     async def _run_delete(self) -> None:
         await self._ensure_runtime()
@@ -171,6 +174,10 @@ class TricklePublisher:
                 finally:
                     await self._session.close()
                     self._session = None
+
+    @property
+    def error(self) -> Optional[BaseException]:
+        return self._error
 
 
 class SegmentWriter:

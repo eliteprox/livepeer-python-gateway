@@ -258,11 +258,14 @@ class MediaPublish:
         try:
             async with await self._publisher.next() as segment:
                 while True:
+                    if getattr(self._publisher, "error", None):
+                        raise LivepeerGatewayError(str(self._publisher.error))
                     chunk = await asyncio.to_thread(read_file.read, _READ_CHUNK)
                     if not chunk:
                         break
                     await segment.write(chunk)
-        except Exception:
+        except Exception as e:
+            self._error = e
             logging.error("MediaPublish pipe stream failed", exc_info=True)
         finally:
             try:
