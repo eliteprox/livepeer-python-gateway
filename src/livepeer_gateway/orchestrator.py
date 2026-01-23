@@ -387,7 +387,9 @@ def GetPayment(
 
     POST {signer_base_url}/generate-live-payment with:
       orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-      priceInfo: pricing selected by the gateway (capability + constraint/model)
+      type: optional job type hint (e.g., "lv2v")
+
+    Note: pricing is embedded in OrchestratorInfo.price_info inside the protobuf.
     """
 
     if typ == "lv2v" and not model_id:
@@ -429,12 +431,6 @@ def GetPayment(
 
     payload = {
         "orchestrator": orch_b64,
-        "priceInfo": {
-            "pricePerUnit": price_info.pricePerUnit,
-            "pixelsPerUnit": price_info.pixelsPerUnit,
-            "capability": capability,
-            "constraint": constraint,
-        },
         "type": typ,
     }
     data = post_json(url, payload)
