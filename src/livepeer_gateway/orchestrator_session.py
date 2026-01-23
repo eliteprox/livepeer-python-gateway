@@ -13,7 +13,7 @@ from .orchestrator import (
     OrchestratorClient,
     StartJobRequest,
     _start_job_with_headers,
-    _build_capabilities,
+    build_capabilities,
     CAPABILITY_LIVE_VIDEO_TO_VIDEO,
 )
 
@@ -81,7 +81,7 @@ class OrchestratorSession:
         """
         caps = None
         if typ == "lv2v" and model_id:
-            caps = _build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, model_id)
+            caps = build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, model_id)
         info = self.ensure_info(force=bool(caps), caps=caps)
         try:
             return GetPayment(self._signer_url, info, typ=typ, model_id=model_id)
@@ -100,7 +100,7 @@ class OrchestratorSession:
         """
         Start a job using cached/refreshable OrchestratorInfo and payment.
         """
-        caps = _build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, req.model_id) if req.model_id else None
+        caps = build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, req.model_id) if req.model_id else None
         info = self.ensure_info(force=bool(caps), caps=caps)
         payment = self.get_payment(typ=typ, model_id=req.model_id)
         headers: dict[str, Optional[str]] = {

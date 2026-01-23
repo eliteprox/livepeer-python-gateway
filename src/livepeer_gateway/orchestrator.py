@@ -195,7 +195,7 @@ def _normalize_https_signer_origin(url: str) -> str:
     return _normalize_https_base_url(url, allow_http=allow_http, keep_path=True)
 
 
-def _build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb2.Capabilities:
+def build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb2.Capabilities:
     """
     Build a capabilities message with an optional constraint for a specific capability.
     """
