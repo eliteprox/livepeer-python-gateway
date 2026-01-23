@@ -409,12 +409,17 @@ def GetPayment(
     # Verify there's some pricing available (either price_info or capabilities_prices).
     price_info = _select_price_info(info, typ=typ, model_id=model_id)
 
+    # Populate price_info on the OrchestratorInfo protobuf that will be sent to the signer.
+    info_for_payment = lp_rpc_pb2.OrchestratorInfo()
+    info_for_payment.CopyFrom(info)
+    info_for_payment.price_info.CopyFrom(price_info)
+
     base = _normalize_https_signer_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
     # The full info is sent including capabilities_prices so the signer can look up pricing
-    pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
+    pb = lp_rpc_pb2.PaymentResult(info=info_for_payment).SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
     capability = price_info.capability
@@ -430,6 +435,7 @@ def GetPayment(
             "capability": capability,
             "constraint": constraint,
         },
+        "type": typ,
     }
     data = post_json(url, payload)
 
@@ -807,14 +813,23 @@ def GetOrchestratorInfo(
     *,
     signer_url: Optional[str] = None,
     caps: Optional[lp_rpc_pb2.Capabilities] = None,
+    typ: str = "lv2v",
+    model_id: Optional[str] = None,
 ) -> lp_rpc_pb2.OrchestratorInfo:
     """
     Public functional API:
-        GetOrchestratorInfo(orch_url, signer_url=...)
+        GetOrchestratorInfo(orch_url, signer_url=..., typ="lv2v", model_id=...)
     Remote signer is called once per process (cached).
     Always uses secure channel (TLS) with certificate verification disabled.
+
+    For live-video-to-video (typ="lv2v"), if a model_id is provided we
+    request orchestrator info with capability 35 and constraint=model_id so
+    ticket params align with the requested model.
     """
-    return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo(caps=caps)
+    effective_caps = caps
+    if typ == "lv2v" and model_id:
+        effective_caps = build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, model_id)
+    return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo(caps=effective_caps)
 
 
 @dataclass
