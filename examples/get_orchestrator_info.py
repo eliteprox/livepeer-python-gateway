@@ -31,7 +31,7 @@ def main() -> None:
 
     for orch_url in args.orchestrators:
         try:
-            info = GetOrchestratorInfo(orch_url,signer_url=args.signer)
+            info = GetOrchestratorInfo(orch_url, signer_url=args.signer)
 
             print("=== OrchestratorInfo ===")
             print("Orchestrator:", orch_url)
