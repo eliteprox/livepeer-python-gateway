@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import ipaddress
 import json
 import os
+import ipaddress
 import re
 import socket
 import ssl
@@ -387,7 +387,7 @@ def GetPayment(
 
     POST {signer_base_url}/generate-live-payment with:
       orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-      type: optional job type hint (e.g., "lv2v")
+      type: job type (default: lv2v)
 
     Note: pricing is embedded in OrchestratorInfo.price_info inside the protobuf.
     """
@@ -424,11 +424,6 @@ def GetPayment(
     pb = lp_rpc_pb2.PaymentResult(info=info_for_payment).SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
-    capability = price_info.capability
-    if typ == "lv2v" and capability == 0:
-        capability = CAPABILITY_LIVE_VIDEO_TO_VIDEO
-    constraint = price_info.constraint or (model_id or "")
-
     payload = {
         "orchestrator": orch_b64,
         "type": typ,
@@ -444,17 +439,6 @@ def GetPayment(
         raise LivepeerGatewayError(f"GetPayment error: invalid 'segCreds' in response (url={url})")
 
     return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
-
-
-def _start_job_with_headers(
-    info: lp_rpc_pb2.OrchestratorInfo,
-    req: StartJobRequest,
-    headers: dict[str, Optional[str]],
-) -> LiveVideoToVideo:
-    base = _normalize_https_base_url(info.transcoder)
-    url = f"{base}/live-video-to-video"
-    data = post_json(url, req.to_json(), headers=headers)
-    return LiveVideoToVideo.from_json(data)
 
 
 def StartJob(
@@ -478,7 +462,10 @@ def StartJob(
         "Livepeer-Segment": p.seg_creds,
     }
 
-    return _start_job_with_headers(info, req, headers)
+    base = _normalize_https_base_url(info.transcoder)
+    url = f"{base}/live-video-to-video"
+    data = post_json(url, req.to_json(), headers=headers)
+    return LiveVideoToVideo.from_json(data)
 
 
 
@@ -778,8 +765,8 @@ class OrchestratorClient:
         request = lp_rpc_pb2.OrchestratorRequest(
             address=signer.address,
             sig=signer.sig,
-            capabilities=caps,
             ignoreCapacityCheck=True,
+            capabilities=caps,
         )
 
         try:
