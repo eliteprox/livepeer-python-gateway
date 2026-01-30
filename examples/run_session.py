@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import io
+import logging
 import os
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Optional
 
 import av
 
+from livepeer_gateway.live_payment import LivePaymentConfig
 from livepeer_gateway.media_publish import MediaPublishConfig
 from livepeer_gateway.orchestrator import LivepeerGatewayError, StartJobRequest
 from livepeer_gateway.orchestrator_session import OrchestratorSession
@@ -91,6 +93,12 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional cap on recorded segments (useful for quick checks).",
+    )
+    p.add_argument(
+        "--payment-interval",
+        type=float,
+        default=5.0,
+        help="Interval in seconds between payment submissions (default: 5.0). Set to 0 to disable live payments.",
     )
     return p.parse_args()
 
@@ -200,10 +208,25 @@ async def _record_trickle(
 async def main() -> None:
     args = _parse_args()
 
+    # Configure logging so we can see payment activity
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
+    # Configure live payments if interval > 0
+    live_payment_config = None
+    if args.payment_interval > 0:
+        live_payment_config = LivePaymentConfig(
+            interval_s=args.payment_interval,
+        )
+        print(f"[payment] Live payments enabled, interval={args.payment_interval}s")
+
     session = OrchestratorSession(
         args.orchestrator,
         signer_url=args.signer,
         max_age_s=args.max_age_s,
+        live_payment_config=live_payment_config,
     )
 
     job = None
@@ -269,8 +292,8 @@ async def main() -> None:
     except LivepeerGatewayError as e:
         print(f"ERROR ({args.orchestrator}): {e}")
     finally:
-        if job is not None:
-            await job.close()
+        # Close session (stops payment senders and job resources)
+        await session.aclose()
 
 
 if __name__ == "__main__":
