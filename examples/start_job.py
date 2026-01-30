@@ -1,13 +1,19 @@
 import argparse
 import json
 
-from livepeer_gateway.orchestrator import GetOrchestratorInfo, LivepeerGatewayError, StartJob, StartJobRequest
+from livepeer_gateway import (
+    GetOrchestratorInfo,
+    LivepeerGatewayError,
+    StartJob,
+    StartJobRequest,
+)
 
 DEFAULT_ORCH = "localhost:8935"
-DEFAULT_MODEL_ID = "noop" # fix
+DEFAULT_MODEL_ID = "noop"
+
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Fetch orchestrator info via Livepeer gRPC.")
+    p = argparse.ArgumentParser(description="Start an LV2V job and display the response.")
     p.add_argument(
         "orchestrator",
         nargs="?",
@@ -26,12 +32,18 @@ def _parse_args() -> argparse.Namespace:
     )
     return p.parse_args()
 
+
 def main() -> None:
     args = _parse_args()
 
     orch_url = args.orchestrator
     try:
-        info = GetOrchestratorInfo(orch_url, signer_url=args.signer)
+        # Request orchestrator info with model_id to get capability-specific pricing
+        info = GetOrchestratorInfo(
+            orch_url,
+            signer_url=args.signer,
+            model_id=args.model_id,
+        )
 
         print("=== OrchestratorInfo ===")
         print("Orchestrator:", orch_url)
@@ -42,9 +54,7 @@ def main() -> None:
         url = info.transcoder
         job = StartJob(
             info,
-            StartJobRequest(
-                model_id=args.model_id,
-            ),
+            StartJobRequest(model_id=args.model_id),
             signer_base_url=args.signer,
         )
         print("=== StartJob ===")
@@ -55,6 +65,7 @@ def main() -> None:
     except LivepeerGatewayError as e:
         print(f"ERROR ({orch_url}): {e}")
         print()
+
 
 if __name__ == "__main__":
     main()

@@ -4,16 +4,17 @@ from fractions import Fraction
 
 import av
 
-from livepeer_gateway.media_publish import MediaPublishConfig
-from livepeer_gateway.orchestrator import (
-    GetOrchestratorInfo,
+from livepeer_gateway import (
+    LivePaymentConfig,
     LivepeerGatewayError,
-    StartJob,
+    MediaPublishConfig,
+    OrchestratorSession,
     StartJobRequest,
 )
 
 DEFAULT_ORCH = "localhost:8935"
-DEFAULT_MODEL_ID = "noop"  # fix
+DEFAULT_MODEL_ID = "noop"
+DEFAULT_PAYMENT_INTERVAL = 5.0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -38,6 +39,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=int, default=180, help="Frame height (default: 180).")
     p.add_argument("--fps", type=float, default=30.0, help="Frames per second (default: 30).")
     p.add_argument("--count", type=int, default=90, help="Number of frames to send (default: 90).")
+    p.add_argument(
+        "--payment-interval",
+        type=float,
+        default=DEFAULT_PAYMENT_INTERVAL,
+        help=f"Payment interval in seconds (default: {DEFAULT_PAYMENT_INTERVAL}).",
+    )
     return p.parse_args()
 
 
@@ -52,17 +59,31 @@ async def main() -> None:
     args = _parse_args()
     frame_interval = 1.0 / max(1e-6, args.fps)
 
+    # Configure live payments if signer is provided
+    live_payment_config = None
+    if args.signer:
+        live_payment_config = LivePaymentConfig(
+            interval_s=args.payment_interval,
+            width=args.width,
+            height=args.height,
+            fps=args.fps,
+        )
+
+    session = OrchestratorSession(
+        args.orchestrator,
+        signer_url=args.signer,
+        live_payment_config=live_payment_config,
+    )
+
     job = None
     try:
-        info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
-        job = StartJob(
-            info,
-            StartJobRequest(model_id=args.model_id),
-            signer_base_url=args.signer,
-        )
+        job = session.start_job(StartJobRequest(model_id=args.model_id))
 
         print("=== LiveVideoToVideo ===")
         print("publish_url:", job.publish_url)
+        print("subscribe_url:", job.subscribe_url)
+        if args.signer and live_payment_config:
+            print(f"live payments: enabled (interval={args.payment_interval}s)")
         print()
 
         media = job.start_media(MediaPublishConfig(fps=args.fps))
@@ -75,11 +96,12 @@ async def main() -> None:
             frame.time_base = time_base
             await media.write_frame(frame)
             await asyncio.sleep(frame_interval)
+
+        print(f"Sent {args.count} frames successfully")
     except LivepeerGatewayError as e:
         print(f"ERROR ({args.orchestrator}): {e}")
     finally:
-        if job is not None:
-            await job.close()
+        await session.aclose()
 
 
 if __name__ == "__main__":
