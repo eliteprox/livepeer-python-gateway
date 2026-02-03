@@ -1,9 +1,11 @@
 import argparse
 
 from livepeer_gateway.capabilities import (
+    ExternalCapability,
     compute_available,
     format_capability,
     get_capacity_in_use,
+    get_external_capabilities,
     get_per_capability_map,
 )
 from livepeer_gateway.orchestrator import GetOrchestratorInfo, LivepeerGatewayError
@@ -138,6 +140,23 @@ def main() -> None:
                 print()
             else:
                 print("Hardware / GPU: not provided")
+                print()
+
+            # Display external/BYOC capabilities
+            ext_caps = get_external_capabilities(info)
+            if ext_caps:
+                print("External/BYOC Capabilities:")
+                for cap in ext_caps:
+                    available = cap.capacity_available
+                    print(f"- {cap.name}")
+                    if cap.description:
+                        print(f"    Description: {cap.description}")
+                    print(f"    Capacity: {cap.capacity} (in use: {cap.capacity_in_use}, available: {available})")
+                    if cap.price_per_unit > 0:
+                        print(f"    Price: {cap.price_per_unit} wei per {cap.price_scaling} unit(s)")
+                print()
+            else:
+                print("External/BYOC Capabilities: none advertised")
                 print()
 
         except LivepeerGatewayError as e:

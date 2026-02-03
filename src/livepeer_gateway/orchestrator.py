@@ -145,41 +145,41 @@ def post_json(
 
 def _normalize_https_base_url(orch_url: str) -> str:
     """
-    Normalize an orchestrator base URL to an https:// URL with no path/query/fragment.
+    Normalize an orchestrator base URL to an http(s):// URL with no path/query/fragment.
 
     Accepts:
     - "host:port" (implicitly treated as https://host:port)
-    - "https://host:port"
+    - "http://host:port" or "https://host:port"
     """
     orch_url = orch_url.strip().rstrip("/")
     url = orch_url if "://" in orch_url else f"https://{orch_url}"
 
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http:// or https:// orchestrator URLs are supported (got {parsed.scheme!r})")
     if not parsed.netloc:
-        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
+        raise ValueError(f"Invalid orchestrator URL: {orch_url!r}")
     if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
         raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
-    return f"https://{parsed.netloc}"
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _normalize_https_origin(url: str) -> str:
     """
-    Normalize a URL (possibly with a path) into an https:// origin (scheme + host:port).
+    Normalize a URL (possibly with a path) into an http(s):// origin (scheme + host:port).
 
     Accepts:
     - "host:port" (implicitly https://host:port)
-    - "https://host:port[/...]" (path/query/fragment are ignored)
+    - "http://host:port[/...]" or "https://host:port[/...]" (path/query/fragment are ignored)
     """
     url = url.strip()
     u = url if "://" in url else f"https://{url}"
     parsed = urlparse(u)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// URLs are supported (got {parsed.scheme!r})")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http:// or https:// URLs are supported (got {parsed.scheme!r})")
     if not parsed.netloc:
-        raise ValueError(f"Invalid https URL: {url!r}")
-    return f"https://{parsed.netloc}"
+        raise ValueError(f"Invalid URL: {url!r}")
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb2.Capabilities:
@@ -205,11 +205,13 @@ def _select_price_info(
     *,
     typ: str,
     model_id: Optional[str],
+    capability: Optional[str] = None,
 ) -> lp_rpc_pb2.PriceInfo:
     """
     Choose the price info to use for a payment request.
 
     For LV2V, prefer a capability-scoped price that matches the requested model ID.
+    For BYOC, look up pricing from the external_capabilities list by name.
     Fallback to the general price_info only if no matching capability price exists.
     """
     if typ == "lv2v":
@@ -234,7 +236,26 @@ def _select_price_info(
             f"No capability price found for LV2V model_id={model_id}; orchestrator did not return usable pricing."
         )
 
-    # Non-LV2V: use general price_info first, otherwise any valid capability price.
+    if typ == "byoc":
+        if not capability:
+            raise LivepeerGatewayError("GetPayment requires capability name for BYOC pricing.")
+
+        # Look up pricing from external_capabilities
+        ext_caps = getattr(info, "external_capabilities", None)
+        if ext_caps:
+            for cap in ext_caps:
+                if cap.name == capability:
+                    price_info = cap.price_info
+                    if price_info.pricePerUnit > 0 and price_info.pixelsPerUnit > 0:
+                        return price_info
+
+        # No matching external capability price found
+        raise LivepeerGatewayError(
+            f"No external capability price found for BYOC capability={capability}; "
+            "orchestrator did not return usable pricing."
+        )
+
+    # Non-LV2V/BYOC: use general price_info first, otherwise any valid capability price.
     if info.HasField("price_info") and info.price_info.pricePerUnit > 0 and info.price_info.pixelsPerUnit > 0:
         return info.price_info
 
@@ -413,6 +434,7 @@ def GetPayment(
     *,
     typ: str = "lv2v",
     model_id: Optional[str] = None,
+    capability: Optional[str] = None,
     state: Optional[PaymentState] = None,
     manifest_id: Optional[str] = None,
 ) -> GetPaymentResponse:
@@ -425,12 +447,18 @@ def GetPayment(
       state: optional opaque state from previous payment (for nonce tracking)
       manifestId: optional manifest ID for the payment
 
+    For BYOC jobs, pass typ="byoc" and capability="capability_name".
+
     The returned GetPaymentResponse includes the updated state which must be
     passed to subsequent calls to ensure unique ticket nonces.
     """
     if typ == "lv2v" and not model_id:
         raise LivepeerGatewayError(
             "GetPayment requires model_id when requesting LV2V payments."
+        )
+    if typ == "byoc" and not capability:
+        raise LivepeerGatewayError(
+            "GetPayment requires capability when requesting BYOC payments."
         )
 
     if not signer_base_url:
@@ -444,8 +472,8 @@ def GetPayment(
         seg = base64.b64encode(seg.SerializeToString()).decode("ascii")
         return GetPaymentResponse(seg_creds=seg, payment="")
 
-    # Select the appropriate price info based on type and model_id
-    price_info = _select_price_info(info, typ=typ, model_id=model_id)
+    # Select the appropriate price info based on type and model_id/capability
+    price_info = _select_price_info(info, typ=typ, model_id=model_id, capability=capability)
 
     # Validate the selected price has non-zero values
     if price_info.pricePerUnit <= 0 or price_info.pixelsPerUnit <= 0:
@@ -476,9 +504,9 @@ def GetPayment(
     pb = info_for_payment.SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
-    capability = price_info.capability
-    if typ == "lv2v" and capability == 0:
-        capability = CAPABILITY_LIVE_VIDEO_TO_VIDEO
+    cap_id = price_info.capability
+    if typ == "lv2v" and cap_id == 0:
+        cap_id = CAPABILITY_LIVE_VIDEO_TO_VIDEO
     constraint = price_info.constraint or (model_id or "")
 
     payload: dict[str, Any] = {
@@ -486,11 +514,15 @@ def GetPayment(
         "priceInfo": {
             "pricePerUnit": price_info.pricePerUnit,
             "pixelsPerUnit": price_info.pixelsPerUnit,
-            "capability": capability,
+            "capability": cap_id,
             "constraint": constraint,
         },
         "type": typ,
     }
+
+    # Include capability name for BYOC jobs
+    if typ == "byoc" and capability:
+        payload["capability"] = capability
 
     # Include state if provided (required for subsequent payments to get unique nonces)
     if state is not None:
