@@ -77,28 +77,34 @@ def _extract_error_message(e: HTTPError) -> str:
     return _truncate(body)
 
 
-def post_json(
+def request_json(
     url: str,
-    payload: dict[str, Any],
     *,
+    method: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
     headers: Optional[dict[str, str]] = None,
     timeout: float = 5.0,
-) -> dict[str, Any]:
+) -> Any:
     """
-    POST JSON to `url` and parse a JSON object response.
+    Make a JSON HTTP request and parse the JSON response.
+
+    If method is None, defaults to POST when payload is provided, otherwise GET.
 
     Raises LivepeerGatewayError on HTTP/network/JSON parsing errors.
     """
     req_headers: dict[str, str] = {
         "Accept": "application/json",
-        "Content-Type": "application/json",
         "User-Agent": "livepeer-python-gateway/0.1",
     }
+    body: Optional[bytes] = None
+    if payload is not None:
+        req_headers["Content-Type"] = "application/json"
+        body = json.dumps(payload).encode("utf-8")
     if headers:
         req_headers.update(headers)
 
-    body = json.dumps(payload).encode("utf-8")
-    req = Request(url, data=body, headers=req_headers, method="POST")
+    resolved_method = method.upper() if method else ("POST" if payload is not None else "GET")
+    req = Request(url, data=body, headers=req_headers, method=resolved_method)
 
     # Always ignore HTTPS certificate validation (matches our gRPC behavior).
     ssl_ctx = ssl._create_unverified_context()
@@ -128,12 +134,42 @@ def post_json(
             f"HTTP JSON error: unexpected error: {e.__class__.__name__}: {e} (url={url})"
         ) from e
 
+    return data
+
+
+def post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """
+    POST JSON to `url` and parse a JSON object response.
+    """
+    data = request_json(
+        url,
+        payload=payload,
+        headers=headers,
+        timeout=timeout,
+    )
     if not isinstance(data, dict):
         raise LivepeerGatewayError(
             f"HTTP JSON error: expected JSON object, got {type(data).__name__} (url={url})"
         )
-
     return data
+
+
+def get_json(
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = 5.0,
+) -> Any:
+    """
+    GET JSON from `url` and parse the response.
+    """
+    return request_json(url, headers=headers, timeout=timeout)
 
 
 def _normalize_https_base_url(orch_url: str) -> str:
