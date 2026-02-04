@@ -93,6 +93,7 @@ class BYOCStreamJob:
     events_url: Optional[str] = None
     data_url: Optional[str] = None
     balance: Optional[int] = None
+    signed_job_request: Optional[str] = None  # Required for job token refresh
 
     _control: Optional[Control] = None
     _events: Optional[Events] = None
@@ -556,6 +557,7 @@ def StartBYOCStream(
                 events_url=events_url,
                 data_url=data_url,
                 balance=balance,
+                signed_job_request=job_request_b64,
             )
 
     except HTTPError as e:
@@ -840,6 +842,7 @@ def _start_byoc_stream_internal(
             events_url=events_url,
             data_url=data_url,
             balance=balance,
+            signed_job_request=job_request_b64,
         )
 
 
@@ -937,6 +940,7 @@ class BYOCTokenRefresher:
         orchestrator_info: lp_rpc_pb2.OrchestratorInfo,
         capability: str,
         stream_id: str,
+        signed_job_request: str,
         *,
         config: Optional[BYOCTokenRefreshConfig] = None,
         initial_state: Optional[PaymentState] = None,
@@ -948,6 +952,7 @@ class BYOCTokenRefresher:
             orchestrator_info: OrchestratorInfo from GetOrchestratorInfo.
             capability: Name of the BYOC capability.
             stream_id: Stream ID from StartBYOCStream.
+            signed_job_request: The signed job request (base64) from StartBYOCStream.
             config: Token refresh configuration (interval, etc.).
             initial_state: Previous payment state for nonce continuity.
         """
@@ -957,6 +962,7 @@ class BYOCTokenRefresher:
         self._orch_info = orchestrator_info
         self._capability = capability
         self._stream_id = stream_id
+        self._signed_job_request = signed_job_request
         self._config = config or BYOCTokenRefreshConfig()
 
         self._task: Optional[asyncio.Task] = None
@@ -1124,9 +1130,11 @@ class BYOCTokenRefresher:
         base_url = _normalize_https_base_url(self._orch_info.transcoder)
         url = f"{base_url}/ai/stream/payment"
 
+        # go-livepeer ProcessStreamPayment requires both the signed job request
+        # (in Livepeer header) and payment (in Livepeer-Payment header)
         headers = {
+            HEADER_JOB_REQUEST: self._signed_job_request,
             HEADER_PAYMENT: payment,
-            HEADER_CAPABILITY: self._capability,
             "Content-Type": "application/json",
         }
 

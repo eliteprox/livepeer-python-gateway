@@ -182,13 +182,14 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
 
     # Start token refresher if signer is provided
     token_refresher = None
-    if args.signer:
+    if args.signer and stream_job.signed_job_request:
         print(f"job token refresh: enabled (interval={args.token_refresh_interval}s)")
         token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
             args.capability,
             stream_job.stream_id,
+            stream_job.signed_job_request,
             config=BYOCTokenRefreshConfig(interval_s=args.token_refresh_interval),
         )
         token_refresher.start()

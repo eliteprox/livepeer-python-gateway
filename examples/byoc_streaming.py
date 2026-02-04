@@ -149,13 +149,14 @@ async def run_stream(args: argparse.Namespace) -> None:
 
     # Start token refresher if signer is provided (BYOC uses job token refresh, not live payments)
     token_refresher = None
-    if args.signer:
+    if args.signer and stream_job.signed_job_request:
         print(f"Starting job token refresher (interval={DEFAULT_TOKEN_REFRESH_INTERVAL}s)...")
         token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
             args.capability,
             stream_job.stream_id,
+            stream_job.signed_job_request,
             config=BYOCTokenRefreshConfig(interval_s=DEFAULT_TOKEN_REFRESH_INTERVAL),
         )
         token_refresher.start()
