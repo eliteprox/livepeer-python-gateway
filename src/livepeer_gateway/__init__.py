@@ -15,7 +15,7 @@ from .byoc import (
     StartBYOCStreamWithRetry,
     StopBYOCStream,
 )
-from .capabilities import ExternalCapability, get_external_capabilities
+from .capabilities import ExternalCapability, fetch_external_capabilities, get_external_capabilities
 from .control import Control
 from .errors import LivepeerGatewayError, SessionRefreshRequired
 from .events import Events
@@ -42,6 +42,7 @@ __all__ = [
     "DecodedMediaFrame",
     "Events",
     "ExternalCapability",
+    "fetch_external_capabilities",
     "GetBYOCJobToken",
     "GetBYOCPayment",
     "GetOrchestratorInfo",

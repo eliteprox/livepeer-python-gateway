@@ -19,7 +19,7 @@ from livepeer_gateway import (
     GetOrchestratorInfo,
     LivepeerGatewayError,
     StartBYOCJob,
-    get_external_capabilities,
+    fetch_external_capabilities,
 )
 
 DEFAULT_ORCH = "localhost:8935"
@@ -70,8 +70,8 @@ def main() -> None:
         print(f"ETH Address: {info.address.hex()}")
         print()
 
-        # List external capabilities
-        ext_caps = get_external_capabilities(info)
+        # List external capabilities (from HTTP endpoint)
+        ext_caps = fetch_external_capabilities(args.orchestrator)
         if not ext_caps:
             print("No external/BYOC capabilities available on this orchestrator.")
             print("Make sure the orchestrator has BYOC capabilities registered.")

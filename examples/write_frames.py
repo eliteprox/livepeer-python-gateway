@@ -16,7 +16,7 @@ from livepeer_gateway import (
     StartBYOCStreamWithRetry,
     StartJobRequest,
     StopBYOCStream,
-    get_external_capabilities,
+    fetch_external_capabilities,
 )
 
 DEFAULT_ORCH = "localhost:8935"
@@ -137,8 +137,8 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     # Get orchestrator info
     info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
 
-    # Verify the capability exists
-    ext_caps = get_external_capabilities(info)
+    # Verify the capability exists (fetch from HTTP endpoint)
+    ext_caps = fetch_external_capabilities(args.orchestrator)
     cap_names = [c.name for c in ext_caps]
     if args.capability not in cap_names:
         available = ", ".join(cap_names) if cap_names else "none"

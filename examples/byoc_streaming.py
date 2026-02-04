@@ -26,7 +26,7 @@ from livepeer_gateway import (
     MediaPublishConfig,
     StartBYOCStream,
     StopBYOCStream,
-    get_external_capabilities,
+    fetch_external_capabilities,
 )
 
 DEFAULT_ORCH = "localhost:8935"
@@ -96,8 +96,8 @@ async def run_stream(args: argparse.Namespace) -> None:
     print(f"ETH Address: {info.address.hex()}")
     print()
 
-    # List external capabilities
-    ext_caps = get_external_capabilities(info)
+    # List external capabilities (from HTTP endpoint)
+    ext_caps = fetch_external_capabilities(args.orchestrator)
     if not ext_caps:
         print("No external/BYOC capabilities available on this orchestrator.")
         sys.exit(1)
