@@ -3,8 +3,7 @@
 import grpc
 import warnings
 
-from . import lp_rpc_pb2 as net_dot_lp__rpc__pb2
-
+from . import lp_rpc_pb2 as lp__rpc__pb2
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
@@ -18,7 +17,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in net/lp_rpc_pb2_grpc.py depends on'
+        + ' but the generated code in lp_rpc_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -37,18 +36,18 @@ class OrchestratorStub(object):
         """
         self.GetOrchestrator = channel.unary_unary(
                 '/net.Orchestrator/GetOrchestrator',
-                request_serializer=net_dot_lp__rpc__pb2.OrchestratorRequest.SerializeToString,
-                response_deserializer=net_dot_lp__rpc__pb2.OrchestratorInfo.FromString,
+                request_serializer=lp__rpc__pb2.OrchestratorRequest.SerializeToString,
+                response_deserializer=lp__rpc__pb2.OrchestratorInfo.FromString,
                 _registered_method=True)
         self.EndTranscodingSession = channel.unary_unary(
                 '/net.Orchestrator/EndTranscodingSession',
-                request_serializer=net_dot_lp__rpc__pb2.EndTranscodingSessionRequest.SerializeToString,
-                response_deserializer=net_dot_lp__rpc__pb2.EndTranscodingSessionResponse.FromString,
+                request_serializer=lp__rpc__pb2.EndTranscodingSessionRequest.SerializeToString,
+                response_deserializer=lp__rpc__pb2.EndTranscodingSessionResponse.FromString,
                 _registered_method=True)
         self.Ping = channel.unary_unary(
                 '/net.Orchestrator/Ping',
-                request_serializer=net_dot_lp__rpc__pb2.PingPong.SerializeToString,
-                response_deserializer=net_dot_lp__rpc__pb2.PingPong.FromString,
+                request_serializer=lp__rpc__pb2.PingPong.SerializeToString,
+                response_deserializer=lp__rpc__pb2.PingPong.FromString,
                 _registered_method=True)
 
 
@@ -80,18 +79,18 @@ def add_OrchestratorServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'GetOrchestrator': grpc.unary_unary_rpc_method_handler(
                     servicer.GetOrchestrator,
-                    request_deserializer=net_dot_lp__rpc__pb2.OrchestratorRequest.FromString,
-                    response_serializer=net_dot_lp__rpc__pb2.OrchestratorInfo.SerializeToString,
+                    request_deserializer=lp__rpc__pb2.OrchestratorRequest.FromString,
+                    response_serializer=lp__rpc__pb2.OrchestratorInfo.SerializeToString,
             ),
             'EndTranscodingSession': grpc.unary_unary_rpc_method_handler(
                     servicer.EndTranscodingSession,
-                    request_deserializer=net_dot_lp__rpc__pb2.EndTranscodingSessionRequest.FromString,
-                    response_serializer=net_dot_lp__rpc__pb2.EndTranscodingSessionResponse.SerializeToString,
+                    request_deserializer=lp__rpc__pb2.EndTranscodingSessionRequest.FromString,
+                    response_serializer=lp__rpc__pb2.EndTranscodingSessionResponse.SerializeToString,
             ),
             'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
-                    request_deserializer=net_dot_lp__rpc__pb2.PingPong.FromString,
-                    response_serializer=net_dot_lp__rpc__pb2.PingPong.SerializeToString,
+                    request_deserializer=lp__rpc__pb2.PingPong.FromString,
+                    response_serializer=lp__rpc__pb2.PingPong.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -120,8 +119,8 @@ class Orchestrator(object):
             request,
             target,
             '/net.Orchestrator/GetOrchestrator',
-            net_dot_lp__rpc__pb2.OrchestratorRequest.SerializeToString,
-            net_dot_lp__rpc__pb2.OrchestratorInfo.FromString,
+            lp__rpc__pb2.OrchestratorRequest.SerializeToString,
+            lp__rpc__pb2.OrchestratorInfo.FromString,
             options,
             channel_credentials,
             insecure,
@@ -147,8 +146,8 @@ class Orchestrator(object):
             request,
             target,
             '/net.Orchestrator/EndTranscodingSession',
-            net_dot_lp__rpc__pb2.EndTranscodingSessionRequest.SerializeToString,
-            net_dot_lp__rpc__pb2.EndTranscodingSessionResponse.FromString,
+            lp__rpc__pb2.EndTranscodingSessionRequest.SerializeToString,
+            lp__rpc__pb2.EndTranscodingSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -174,8 +173,8 @@ class Orchestrator(object):
             request,
             target,
             '/net.Orchestrator/Ping',
-            net_dot_lp__rpc__pb2.PingPong.SerializeToString,
-            net_dot_lp__rpc__pb2.PingPong.FromString,
+            lp__rpc__pb2.PingPong.SerializeToString,
+            lp__rpc__pb2.PingPong.FromString,
             options,
             channel_credentials,
             insecure,
@@ -198,8 +197,8 @@ class AIWorkerStub(object):
         """
         self.RegisterAIWorker = channel.unary_stream(
                 '/net.AIWorker/RegisterAIWorker',
-                request_serializer=net_dot_lp__rpc__pb2.RegisterAIWorkerRequest.SerializeToString,
-                response_deserializer=net_dot_lp__rpc__pb2.NotifyAIJob.FromString,
+                request_serializer=lp__rpc__pb2.RegisterAIWorkerRequest.SerializeToString,
+                response_deserializer=lp__rpc__pb2.NotifyAIJob.FromString,
                 _registered_method=True)
 
 
@@ -219,8 +218,8 @@ def add_AIWorkerServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'RegisterAIWorker': grpc.unary_stream_rpc_method_handler(
                     servicer.RegisterAIWorker,
-                    request_deserializer=net_dot_lp__rpc__pb2.RegisterAIWorkerRequest.FromString,
-                    response_serializer=net_dot_lp__rpc__pb2.NotifyAIJob.SerializeToString,
+                    request_deserializer=lp__rpc__pb2.RegisterAIWorkerRequest.FromString,
+                    response_serializer=lp__rpc__pb2.NotifyAIJob.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -248,8 +247,8 @@ class AIWorker(object):
             request,
             target,
             '/net.AIWorker/RegisterAIWorker',
-            net_dot_lp__rpc__pb2.RegisterAIWorkerRequest.SerializeToString,
-            net_dot_lp__rpc__pb2.NotifyAIJob.FromString,
+            lp__rpc__pb2.RegisterAIWorkerRequest.SerializeToString,
+            lp__rpc__pb2.NotifyAIJob.FromString,
             options,
             channel_credentials,
             insecure,
@@ -272,8 +271,8 @@ class TranscoderStub(object):
         """
         self.RegisterTranscoder = channel.unary_stream(
                 '/net.Transcoder/RegisterTranscoder',
-                request_serializer=net_dot_lp__rpc__pb2.RegisterRequest.SerializeToString,
-                response_deserializer=net_dot_lp__rpc__pb2.NotifySegment.FromString,
+                request_serializer=lp__rpc__pb2.RegisterRequest.SerializeToString,
+                response_deserializer=lp__rpc__pb2.NotifySegment.FromString,
                 _registered_method=True)
 
 
@@ -293,8 +292,8 @@ def add_TranscoderServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'RegisterTranscoder': grpc.unary_stream_rpc_method_handler(
                     servicer.RegisterTranscoder,
-                    request_deserializer=net_dot_lp__rpc__pb2.RegisterRequest.FromString,
-                    response_serializer=net_dot_lp__rpc__pb2.NotifySegment.SerializeToString,
+                    request_deserializer=lp__rpc__pb2.RegisterRequest.FromString,
+                    response_serializer=lp__rpc__pb2.NotifySegment.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -322,8 +321,8 @@ class Transcoder(object):
             request,
             target,
             '/net.Transcoder/RegisterTranscoder',
-            net_dot_lp__rpc__pb2.RegisterRequest.SerializeToString,
-            net_dot_lp__rpc__pb2.NotifySegment.FromString,
+            lp__rpc__pb2.RegisterRequest.SerializeToString,
+            lp__rpc__pb2.NotifySegment.FromString,
             options,
             channel_credentials,
             insecure,
