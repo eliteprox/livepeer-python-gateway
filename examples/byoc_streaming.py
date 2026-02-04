@@ -4,7 +4,7 @@ Example demonstrating streaming BYOC job execution.
 This example shows how to:
 1. Connect to an orchestrator and discover BYOC capabilities
 2. Start a streaming BYOC job (like comfystream)
-3. Handle continuous payments during the stream
+3. Handle job token refresh during the stream (~1 minute interval)
 4. Publish media frames and receive processed output
 5. Stop the stream gracefully
 
@@ -19,8 +19,8 @@ import signal
 import sys
 
 from livepeer_gateway import (
-    BYOCPaymentConfig,
-    BYOCPaymentSender,
+    BYOCTokenRefreshConfig,
+    BYOCTokenRefresher,
     GetOrchestratorInfo,
     LivepeerGatewayError,
     MediaPublishConfig,
@@ -30,6 +30,7 @@ from livepeer_gateway import (
 )
 
 DEFAULT_ORCH = "localhost:8935"
+DEFAULT_TOKEN_REFRESH_INTERVAL = 60.0  # BYOC uses job token refresh (~1 minute)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -146,18 +147,18 @@ async def run_stream(args: argparse.Namespace) -> None:
     print(f"  Data URL: {stream_job.data_url or 'N/A'}")
     print()
 
-    # Start payment sender if signer is provided
-    payment_sender = None
+    # Start token refresher if signer is provided (BYOC uses job token refresh, not live payments)
+    token_refresher = None
     if args.signer:
-        print("Starting payment sender...")
-        payment_sender = BYOCPaymentSender(
+        print(f"Starting job token refresher (interval={DEFAULT_TOKEN_REFRESH_INTERVAL}s)...")
+        token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
             args.capability,
             stream_job.stream_id,
-            config=BYOCPaymentConfig(interval_s=5.0),
+            config=BYOCTokenRefreshConfig(interval_s=DEFAULT_TOKEN_REFRESH_INTERVAL),
         )
-        payment_sender.start()
+        token_refresher.start()
 
     # Setup signal handler for graceful shutdown
     stop_event = asyncio.Event()
@@ -204,10 +205,10 @@ async def run_stream(args: argparse.Namespace) -> None:
             print("Stream duration completed.")
 
     finally:
-        # Stop payment sender
-        if payment_sender:
-            print("Stopping payment sender...")
-            await payment_sender.stop()
+        # Stop token refresher
+        if token_refresher:
+            print("Stopping token refresher...")
+            await token_refresher.stop()
 
         # Stop the stream
         print(f"Stopping stream: {stream_job.stream_id}")

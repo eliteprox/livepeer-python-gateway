@@ -4,6 +4,8 @@ from .byoc import (
     BYOCPaymentConfig,
     BYOCPaymentSender,
     BYOCStreamJob,
+    BYOCTokenRefreshConfig,
+    BYOCTokenRefresher,
     GetBYOCPayment,
     SendBYOCPayment,
     StartBYOCJob,
@@ -28,9 +30,11 @@ __all__ = [
     "AudioDecodedMediaFrame",
     "BYOCJobRequest",
     "BYOCJobResponse",
-    "BYOCPaymentConfig",
-    "BYOCPaymentSender",
+    "BYOCPaymentConfig",  # Backwards compat alias for BYOCTokenRefreshConfig
+    "BYOCPaymentSender",  # Backwards compat alias for BYOCTokenRefresher
     "BYOCStreamJob",
+    "BYOCTokenRefreshConfig",
+    "BYOCTokenRefresher",
     "Control",
     "DecodedMediaFrame",
     "Events",

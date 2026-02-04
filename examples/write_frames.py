@@ -5,8 +5,8 @@ from fractions import Fraction
 import av
 
 from livepeer_gateway import (
-    BYOCPaymentConfig,
-    BYOCPaymentSender,
+    BYOCTokenRefreshConfig,
+    BYOCTokenRefresher,
     GetOrchestratorInfo,
     LivePaymentConfig,
     LivepeerGatewayError,
@@ -20,7 +20,8 @@ from livepeer_gateway import (
 
 DEFAULT_ORCH = "localhost:8935"
 DEFAULT_MODEL_ID = "noop"
-DEFAULT_PAYMENT_INTERVAL = 5.0
+DEFAULT_PAYMENT_INTERVAL = 5.0  # For LV2V live payments
+DEFAULT_TOKEN_REFRESH_INTERVAL = 60.0  # For BYOC job token refresh
 
 
 def _parse_args() -> argparse.Namespace:
@@ -60,7 +61,13 @@ def _parse_args() -> argparse.Namespace:
         "--payment-interval",
         type=float,
         default=DEFAULT_PAYMENT_INTERVAL,
-        help=f"Payment interval in seconds (default: {DEFAULT_PAYMENT_INTERVAL}).",
+        help=f"Live payment interval in seconds for LV2V mode (default: {DEFAULT_PAYMENT_INTERVAL}).",
+    )
+    p.add_argument(
+        "--token-refresh-interval",
+        type=float,
+        default=DEFAULT_TOKEN_REFRESH_INTERVAL,
+        help=f"Job token refresh interval in seconds for BYOC mode (default: {DEFAULT_TOKEN_REFRESH_INTERVAL}).",
     )
     return p.parse_args()
 
@@ -164,18 +171,18 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     print("control_url:", stream_job.control_url)
     print("events_url:", stream_job.events_url)
 
-    # Start payment sender if signer is provided
-    payment_sender = None
+    # Start token refresher if signer is provided
+    token_refresher = None
     if args.signer:
-        print(f"live payments: enabled (interval={args.payment_interval}s)")
-        payment_sender = BYOCPaymentSender(
+        print(f"job token refresh: enabled (interval={args.token_refresh_interval}s)")
+        token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
             args.capability,
             stream_job.stream_id,
-            config=BYOCPaymentConfig(interval_s=args.payment_interval),
+            config=BYOCTokenRefreshConfig(interval_s=args.token_refresh_interval),
         )
-        payment_sender.start()
+        token_refresher.start()
     print()
 
     try:
@@ -196,9 +203,9 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
 
         print(f"Sent {args.count} frames successfully")
     finally:
-        # Stop payment sender
-        if payment_sender:
-            await payment_sender.stop()
+        # Stop token refresher
+        if token_refresher:
+            await token_refresher.stop()
 
         # Stop the BYOC stream
         print(f"Stopping stream: {stream_job.stream_id}")

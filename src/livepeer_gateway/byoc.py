@@ -811,23 +811,28 @@ async def StopBYOCStream(
     logging.info("BYOC stream stopped: stream_id=%s", stream_id)
 
 
-# Default payment interval for BYOC streaming
-DEFAULT_BYOC_PAYMENT_INTERVAL = 5.0
+# Default interval for BYOC job token refresh (about once a minute)
+DEFAULT_BYOC_TOKEN_REFRESH_INTERVAL = 60.0
 
 
 @dataclass
-class BYOCPaymentConfig:
-    """Configuration for BYOC payment processing."""
+class BYOCTokenRefreshConfig:
+    """Configuration for BYOC job token refresh."""
 
-    interval_s: float = DEFAULT_BYOC_PAYMENT_INTERVAL
+    interval_s: float = DEFAULT_BYOC_TOKEN_REFRESH_INTERVAL
 
 
-class BYOCPaymentSender:
+# Backwards compatibility aliases
+BYOCPaymentConfig = BYOCTokenRefreshConfig
+DEFAULT_BYOC_PAYMENT_INTERVAL = DEFAULT_BYOC_TOKEN_REFRESH_INTERVAL
+
+
+class BYOCTokenRefresher:
     """
-    Periodically sends payments to keep a BYOC streaming session funded.
+    Periodically refreshes the job token to keep a BYOC streaming session active.
 
-    Unlike LivePaymentSender which uses pixel-based pricing, BYOC uses
-    time-based pricing where the cost is calculated based on elapsed time.
+    Unlike LV2V which uses pixel-based live payments sent every few seconds,
+    BYOC uses a signed job token that is refreshed approximately once per minute.
     """
 
     def __init__(
@@ -837,17 +842,17 @@ class BYOCPaymentSender:
         capability: str,
         stream_id: str,
         *,
-        config: Optional[BYOCPaymentConfig] = None,
+        config: Optional[BYOCTokenRefreshConfig] = None,
         initial_state: Optional[PaymentState] = None,
     ) -> None:
-        """Initialize the BYOC payment sender.
+        """Initialize the BYOC token refresher.
 
         Args:
             signer_url: Base URL of the remote signer.
             orchestrator_info: OrchestratorInfo from GetOrchestratorInfo.
             capability: Name of the BYOC capability.
             stream_id: Stream ID from StartBYOCStream.
-            config: Payment configuration (interval, etc.).
+            config: Token refresh configuration (interval, etc.).
             initial_state: Previous payment state for nonce continuity.
         """
         import asyncio
@@ -856,11 +861,11 @@ class BYOCPaymentSender:
         self._orch_info = orchestrator_info
         self._capability = capability
         self._stream_id = stream_id
-        self._config = config or BYOCPaymentConfig()
+        self._config = config or BYOCTokenRefreshConfig()
 
         self._task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
-        self._last_payment_time: Optional[float] = None
+        self._last_refresh_time: Optional[float] = None
         self._running = False
         self._error: Optional[BaseException] = None
 
@@ -868,7 +873,7 @@ class BYOCPaymentSender:
         self._payment_state: Optional[PaymentState] = initial_state
 
     def start(self) -> None:
-        """Start the background payment task."""
+        """Start the background token refresh task."""
         import asyncio
 
         if self._running:
@@ -876,11 +881,11 @@ class BYOCPaymentSender:
 
         self._running = True
         self._stop_event = asyncio.Event()
-        self._last_payment_time = time.monotonic()
-        self._task = asyncio.create_task(self._payment_loop())
+        self._last_refresh_time = time.monotonic()
+        self._task = asyncio.create_task(self._refresh_loop())
 
     async def stop(self) -> None:
-        """Stop the background payment task."""
+        """Stop the background token refresh task."""
         import asyncio
 
         if not self._running:
@@ -900,12 +905,22 @@ class BYOCPaymentSender:
                 except asyncio.CancelledError:
                     pass
 
-    async def _payment_loop(self) -> None:
-        """Main payment loop that runs in the background."""
+    async def _refresh_loop(self) -> None:
+        """Main token refresh loop that runs in the background."""
         import asyncio
 
+        # Check if capability has zero price - no need to run refresh loop
+        cap_price = _get_capability_price(self._orch_info, self._capability)
+        if cap_price is None or cap_price.pricePerUnit == 0:
+            logging.info(
+                "BYOCTokenRefresher: zero price capability, no token refresh needed: capability=%s, stream_id=%s",
+                self._capability,
+                self._stream_id,
+            )
+            return
+
         logging.info(
-            "BYOCPaymentSender started: interval=%.1fs, capability=%s, stream_id=%s",
+            "BYOCTokenRefresher started: interval=%.1fs, capability=%s, stream_id=%s",
             self._config.interval_s,
             self._capability,
             self._stream_id,
@@ -922,40 +937,50 @@ class BYOCPaymentSender:
                     # If we get here, stop was requested
                     break
                 except asyncio.TimeoutError:
-                    # Normal timeout - time to send payment
+                    # Normal timeout - time to refresh token
                     pass
 
-                await self._send_payment()
+                await self._refresh_token()
 
             except Exception as e:
-                logging.error("BYOCPaymentSender error: %s", e, exc_info=True)
+                logging.error("BYOCTokenRefresher error: %s", e, exc_info=True)
                 self._error = e
-                # Continue trying - don't stop on payment errors
+                # Continue trying - don't stop on refresh errors
 
         logging.info(
-            "BYOCPaymentSender stopped: capability=%s, stream_id=%s",
+            "BYOCTokenRefresher stopped: capability=%s, stream_id=%s",
             self._capability,
             self._stream_id,
         )
 
-    async def _send_payment(self) -> None:
-        """Send a single payment to the orchestrator."""
+    async def _refresh_token(self) -> None:
+        """Refresh the job token by sending it to the orchestrator."""
         import asyncio
 
-        now = time.monotonic()
-        if self._last_payment_time is None:
-            self._last_payment_time = now
+        # Check if capability has zero price - skip refresh if so
+        cap_price = _get_capability_price(self._orch_info, self._capability)
+        if cap_price is None or cap_price.pricePerUnit == 0:
+            logging.debug(
+                "Skipping BYOC token refresh - zero price: capability=%s, stream_id=%s",
+                self._capability,
+                self._stream_id,
+            )
+            return
 
-        seconds_since_last = now - self._last_payment_time
+        now = time.monotonic()
+        if self._last_refresh_time is None:
+            self._last_refresh_time = now
+
+        seconds_since_last = now - self._last_refresh_time
 
         logging.debug(
-            "Processing BYOC payment: secs=%.2f, capability=%s, stream_id=%s",
+            "Refreshing BYOC job token: secs=%.2f, capability=%s, stream_id=%s",
             seconds_since_last,
             self._capability,
             self._stream_id,
         )
 
-        # Get fresh payment credentials from remote signer
+        # Get fresh payment credentials from remote signer for the new token
         def do_get_payment():
             return GetBYOCPayment(
                 self._signer_url,
@@ -967,22 +992,22 @@ class BYOCPaymentSender:
 
         payment_resp = await asyncio.to_thread(do_get_payment)
 
-        # Update state from response for next payment
+        # Update state from response for next refresh
         if payment_resp.state is not None:
             self._payment_state = payment_resp.state
             logging.debug(
-                "Updated BYOC payment state: capability=%s, stream_id=%s",
+                "Updated BYOC token state: capability=%s, stream_id=%s",
                 self._capability,
                 self._stream_id,
             )
 
-        # Forward payment to orchestrator's /ai/stream/payment endpoint
-        await self._forward_payment_to_orchestrator(payment_resp.payment)
+        # Send the refreshed token to orchestrator's /ai/stream/payment endpoint
+        await self._send_refreshed_token(payment_resp.payment)
 
-        self._last_payment_time = now
+        self._last_refresh_time = now
 
-    async def _forward_payment_to_orchestrator(self, payment: str) -> None:
-        """Forward payment to the orchestrator's BYOC payment endpoint."""
+    async def _send_refreshed_token(self, payment: str) -> None:
+        """Send the refreshed job token to the orchestrator's payment endpoint."""
         import asyncio
 
         base_url = _normalize_https_base_url(self._orch_info.transcoder)
@@ -1005,22 +1030,26 @@ class BYOCPaymentSender:
                     from .errors import LivepeerGatewayError
 
                     raise LivepeerGatewayError(
-                        f"Orchestrator rejected BYOC payment: HTTP {resp.status}"
+                        f"Orchestrator rejected BYOC token refresh: HTTP {resp.status}"
                     )
                 return resp.read()
 
         try:
             response_data = await asyncio.to_thread(do_request)
             logging.debug(
-                "BYOC payment accepted by orchestrator: capability=%s, stream_id=%s, response_len=%d",
+                "BYOC job token refreshed: capability=%s, stream_id=%s, response_len=%d",
                 self._capability,
                 self._stream_id,
                 len(response_data),
             )
         except Exception as e:
             logging.error(
-                "Failed to forward BYOC payment to orchestrator: %s, url=%s",
+                "Failed to refresh BYOC job token: %s, url=%s",
                 e,
                 url,
             )
             raise
+
+
+# Backwards compatibility alias
+BYOCPaymentSender = BYOCTokenRefresher
