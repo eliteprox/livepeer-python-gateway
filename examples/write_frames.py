@@ -7,6 +7,7 @@ import av
 from livepeer_gateway import (
     BYOCTokenRefreshConfig,
     BYOCTokenRefresher,
+    GetBYOCJobToken,
     GetOrchestratorInfo,
     LivePaymentConfig,
     LivepeerGatewayError,
@@ -164,7 +165,15 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     print("capability:", args.capability)
     if cap_info:
         print(f"  description: {cap_info.description or 'N/A'}")
-        print(f"  price: {cap_info.price_per_unit} wei per {cap_info.price_scaling} unit(s)")
+    # Fetch job token to display accurate pricing for this sender
+    if args.signer:
+        try:
+            job_token = GetBYOCJobToken(info, args.capability, args.signer)
+            print(f"  price: {job_token.price_per_unit} wei per {job_token.pixels_per_unit} unit(s)")
+            print(f"  balance: {job_token.balance}")
+            print(f"  available_capacity: {job_token.available_capacity}")
+        except Exception as e:
+            print(f"  price: (could not fetch job token: {e})")
     print("stream_id:", stream_job.stream_id)
     print("publish_url:", stream_job.publish_url)
     print("subscribe_url:", stream_job.subscribe_url)

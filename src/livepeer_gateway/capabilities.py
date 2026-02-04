@@ -85,14 +85,16 @@ def get_capacity_in_use(model_constraint: Any) -> int:
 
 @dataclass
 class ExternalCapability:
-    """Represents an external/BYOC capability offered by an orchestrator."""
+    """Represents an external/BYOC capability offered by an orchestrator.
+
+    Note: Pricing is not included here. Use byoc.GetBYOCJobToken() to fetch
+    accurate per-sender pricing from the orchestrator's /process/token endpoint.
+    """
 
     name: str
     description: str
     capacity: int
     capacity_in_use: int
-    price_per_unit: int
-    price_scaling: int
 
     @property
     def capacity_available(self) -> int:
@@ -110,6 +112,9 @@ def get_external_capabilities(
 
     Returns:
         List of ExternalCapability instances parsed from the info.
+
+    Note: Pricing is not included in the returned capabilities.
+    Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
     """
     result: list[ExternalCapability] = []
     ext_caps = getattr(info, "external_capabilities", None)
@@ -117,17 +122,6 @@ def get_external_capabilities(
         return result
 
     for cap in ext_caps:
-        price_info = getattr(cap, "price_info", None)
-        price_per_unit = 0
-        price_scaling = 1
-        if price_info is not None:
-            price_per_unit = getattr(price_info, "pricePerUnit", 0) or getattr(
-                price_info, "price_per_unit", 0
-            )
-            price_scaling = getattr(price_info, "pixelsPerUnit", 1) or getattr(
-                price_info, "pixels_per_unit", 1
-            )
-
         result.append(
             ExternalCapability(
                 name=getattr(cap, "name", ""),
@@ -135,8 +129,6 @@ def get_external_capabilities(
                 capacity=getattr(cap, "capacity", 0),
                 capacity_in_use=getattr(cap, "capacity_in_use", 0)
                 or getattr(cap, "capacityInUse", 0),
-                price_per_unit=price_per_unit,
-                price_scaling=price_scaling,
             )
         )
     return result

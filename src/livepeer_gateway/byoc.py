@@ -63,6 +63,23 @@ class BYOCJobResponse:
 
 
 @dataclass
+class BYOCJobToken:
+    """Token response from orchestrator's /process/token endpoint.
+
+    This contains the actual pricing for the sender/capability combination,
+    which may differ from the advertised pricing due to sender-specific rates
+    or transaction cost adjustments.
+    """
+
+    price_per_unit: int
+    pixels_per_unit: int
+    balance: int
+    available_capacity: int
+    service_addr: str
+    ticket_params: Optional[dict[str, Any]] = None  # Raw ticket params from JobToken
+
+
+@dataclass
 class BYOCStreamJob:
     """Represents an active BYOC streaming job."""
 
@@ -147,25 +164,86 @@ class BYOCStreamJob:
         )
 
 
-def _get_capability_price(
+def GetBYOCJobToken(
     info: lp_rpc_pb2.OrchestratorInfo,
     capability: str,
-) -> Optional[lp_rpc_pb2.PriceInfo]:
-    """Get the price info for a BYOC capability.
+    signer_base_url: str,
+) -> BYOCJobToken:
+    """Fetch a job token from the orchestrator's /process/token endpoint.
+
+    This retrieves accurate pricing for the sender/capability combination,
+    which may differ from advertised pricing due to sender-specific rates
+    or transaction cost adjustments.
 
     Args:
-        info: OrchestratorInfo containing external capabilities.
+        info: OrchestratorInfo from GetOrchestratorInfo.
         capability: Name of the BYOC capability.
+        signer_base_url: Base URL of remote signer for authentication.
 
     Returns:
-        PriceInfo if found, None otherwise.
+        BYOCJobToken with pricing and capacity information.
+
+    Raises:
+        LivepeerGatewayError: If the token request fails.
     """
-    ext_caps = getattr(info, "external_capabilities", None)
-    if ext_caps:
-        for cap in ext_caps:
-            if cap.name == capability:
-                return cap.price_info
-    return None
+    from .errors import LivepeerGatewayError
+    from .orchestrator import _get_signer_material
+
+    # Get sender address and signature from signer
+    signer_material = _get_signer_material(signer_base_url)
+    if signer_material.address is None or signer_material.sig is None:
+        raise LivepeerGatewayError(
+            "Cannot get job token: signer did not return address/signature"
+        )
+
+    # Build the Livepeer-Eth-Address header (base64-encoded JSON)
+    # Format matches Go's JobSender: {"addr": "0x...", "sig": "0x..."}
+    # IMPORTANT: Use address_hex (the original checksummed address) because
+    # the signature was created over the checksummed string, not lowercase bytes
+    addr_hex = signer_material.address_hex
+    sig_hex = "0x" + signer_material.sig.hex()
+    job_sender = {"addr": addr_hex, "sig": sig_hex}
+    job_sender_json = json.dumps(job_sender)
+    job_sender_b64 = base64.b64encode(job_sender_json.encode()).decode()
+
+    # Build URL for /process/token endpoint
+    base_url = _normalize_https_base_url(info.transcoder)
+    url = f"{base_url}/process/token"
+
+    headers = {
+        HEADER_ETH_ADDRESS: job_sender_b64,
+        HEADER_CAPABILITY: capability,
+    }
+
+    request = Request(url, headers=headers, method="GET")
+    ssl_ctx = ssl._create_unverified_context()
+
+    try:
+        with urlopen(request, timeout=BYOC_REQUEST_TIMEOUT, context=ssl_ctx) as resp:
+            response_data = resp.read()
+            token_data = json.loads(response_data)
+
+            # Extract price info (nested under "price")
+            price = token_data.get("price", {})
+            price_per_unit = price.get("pricePerUnit", 0)
+            pixels_per_unit = price.get("pixelsPerUnit", 1)
+
+            # Extract ticket_params for payment generation
+            ticket_params = token_data.get("ticket_params")
+
+            return BYOCJobToken(
+                price_per_unit=price_per_unit,
+                pixels_per_unit=pixels_per_unit,
+                balance=token_data.get("balance", 0),
+                available_capacity=token_data.get("available_capacity", 0),
+                service_addr=token_data.get("service_addr", ""),
+                ticket_params=ticket_params,
+            )
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        raise LivepeerGatewayError(
+            f"Failed to get job token from orchestrator: HTTP {e.code} - {body}"
+        ) from e
 
 
 def _sign_byoc_job(
@@ -258,6 +336,7 @@ def GetBYOCPayment(
     signer_base_url: str,
     info: lp_rpc_pb2.OrchestratorInfo,
     capability: str,
+    job_token: Optional[BYOCJobToken] = None,
     state: Optional[PaymentState] = None,
     manifest_id: Optional[str] = None,
 ):
@@ -270,6 +349,7 @@ def GetBYOCPayment(
         signer_base_url: Base URL of the remote signer.
         info: OrchestratorInfo containing ticket params and pricing.
         capability: Name of the BYOC capability (e.g., "comfystream").
+        job_token: BYOCJobToken with pricing from GetBYOCJobToken (fetched if not provided).
         state: Previous payment state for nonce continuity.
         manifest_id: Optional manifest ID for balance tracking.
 
@@ -278,6 +358,10 @@ def GetBYOCPayment(
     """
     from .orchestrator import GetPayment
 
+    # Fetch job token if not provided
+    if job_token is None:
+        job_token = GetBYOCJobToken(info, capability, signer_base_url)
+
     return GetPayment(
         signer_base_url,
         info,
@@ -285,6 +369,9 @@ def GetBYOCPayment(
         capability=capability,
         state=state,
         manifest_id=manifest_id,
+        price_per_unit=job_token.price_per_unit,
+        pixels_per_unit=job_token.pixels_per_unit,
+        ticket_params=job_token.ticket_params,
     )
 
 
@@ -323,15 +410,21 @@ def StartBYOCJob(
         "Content-Type": "application/json",
     }
 
-    # Get payment if signer is provided
+    # Get payment if signer is provided and price is non-zero
     if signer_base_url:
-        payment_resp = GetBYOCPayment(
-            signer_base_url,
-            info,
-            req.capability,
-            state=payment_state,
-        )
-        headers[HEADER_PAYMENT] = payment_resp.payment
+        # Fetch job token to get accurate pricing for this sender/capability
+        job_token = GetBYOCJobToken(info, req.capability, signer_base_url)
+        if job_token.price_per_unit > 0 and job_token.pixels_per_unit > 0:
+            payment_resp = GetBYOCPayment(
+                signer_base_url,
+                info,
+                req.capability,
+                job_token=job_token,
+                state=payment_state,
+            )
+            headers[HEADER_PAYMENT] = payment_resp.payment
+        else:
+            logging.debug("Capability %s has zero price, skipping payment", req.capability)
 
     # Make request
     body = json.dumps(req.request).encode()
@@ -699,13 +792,14 @@ def _start_byoc_stream_internal(
 
     # Get payment if signer is provided and price is non-zero
     if signer_base_url:
-        # Check if the capability has non-zero pricing
-        cap_price = _get_capability_price(info, capability)
-        if cap_price is not None and cap_price.pricePerUnit > 0 and cap_price.pixelsPerUnit > 0:
+        # Fetch job token to get accurate pricing for this sender/capability
+        job_token = GetBYOCJobToken(info, capability, signer_base_url)
+        if job_token.price_per_unit > 0 and job_token.pixels_per_unit > 0:
             payment_resp = GetBYOCPayment(
                 signer_base_url,
                 info,
                 capability,
+                job_token=job_token,
                 state=payment_state,
                 manifest_id=capability,
             )
@@ -787,12 +881,14 @@ async def StopBYOCStream(
 
     # Get payment if signer is provided and price is non-zero
     if signer_base_url:
-        cap_price = _get_capability_price(info, capability)
-        if cap_price is not None and cap_price.pricePerUnit > 0 and cap_price.pixelsPerUnit > 0:
+        # Fetch job token to get accurate pricing for this sender/capability
+        job_token = GetBYOCJobToken(info, capability, signer_base_url)
+        if job_token.price_per_unit > 0 and job_token.pixels_per_unit > 0:
             payment_resp = GetBYOCPayment(
                 signer_base_url,
                 info,
                 capability,
+                job_token=job_token,
                 state=payment_state,
             )
             headers[HEADER_PAYMENT] = payment_resp.payment
@@ -910,14 +1006,21 @@ class BYOCTokenRefresher:
         import asyncio
 
         # Check if capability has zero price - no need to run refresh loop
-        cap_price = _get_capability_price(self._orch_info, self._capability)
-        if cap_price is None or cap_price.pricePerUnit == 0:
-            logging.info(
-                "BYOCTokenRefresher: zero price capability, no token refresh needed: capability=%s, stream_id=%s",
+        try:
+            job_token = GetBYOCJobToken(self._orch_info, self._capability, self._signer_url)
+            if job_token.price_per_unit == 0:
+                logging.info(
+                    "BYOCTokenRefresher: zero price capability, no token refresh needed: capability=%s, stream_id=%s",
+                    self._capability,
+                    self._stream_id,
+                )
+                return
+        except Exception as e:
+            logging.warning(
+                "BYOCTokenRefresher: could not fetch job token, assuming paid capability: capability=%s, err=%s",
                 self._capability,
-                self._stream_id,
+                e,
             )
-            return
 
         logging.info(
             "BYOCTokenRefresher started: interval=%.1fs, capability=%s, stream_id=%s",
@@ -958,14 +1061,22 @@ class BYOCTokenRefresher:
         import asyncio
 
         # Check if capability has zero price - skip refresh if so
-        cap_price = _get_capability_price(self._orch_info, self._capability)
-        if cap_price is None or cap_price.pricePerUnit == 0:
-            logging.debug(
-                "Skipping BYOC token refresh - zero price: capability=%s, stream_id=%s",
+        try:
+            job_token = GetBYOCJobToken(self._orch_info, self._capability, self._signer_url)
+            if job_token.price_per_unit == 0:
+                logging.debug(
+                    "Skipping BYOC token refresh - zero price: capability=%s, stream_id=%s",
+                    self._capability,
+                    self._stream_id,
+                )
+                return
+        except Exception as e:
+            logging.warning(
+                "BYOCTokenRefresher: could not fetch job token for price check: capability=%s, err=%s",
                 self._capability,
-                self._stream_id,
+                e,
             )
-            return
+            # Continue with refresh - orchestrator will reject if needed
 
         now = time.monotonic()
         if self._last_refresh_time is None:

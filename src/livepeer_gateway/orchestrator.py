@@ -211,8 +211,9 @@ def _select_price_info(
     Choose the price info to use for a payment request.
 
     For LV2V, prefer a capability-scoped price that matches the requested model ID.
-    For BYOC, look up pricing from the external_capabilities list by name.
     Fallback to the general price_info only if no matching capability price exists.
+
+    Note: BYOC pricing should be fetched via GetBYOCJobToken from byoc.py, not this function.
     """
     if typ == "lv2v":
         if not model_id:
@@ -237,22 +238,11 @@ def _select_price_info(
         )
 
     if typ == "byoc":
-        if not capability:
-            raise LivepeerGatewayError("GetPayment requires capability name for BYOC pricing.")
-
-        # Look up pricing from external_capabilities
-        ext_caps = getattr(info, "external_capabilities", None)
-        if ext_caps:
-            for cap in ext_caps:
-                if cap.name == capability:
-                    price_info = cap.price_info
-                    if price_info.pricePerUnit > 0 and price_info.pixelsPerUnit > 0:
-                        return price_info
-
-        # No matching external capability price found
+        # BYOC pricing is now fetched via GetBYOCJobToken from the /process/token endpoint.
+        # This provides accurate per-sender pricing. Use GetBYOCJobToken instead.
         raise LivepeerGatewayError(
-            f"No external capability price found for BYOC capability={capability}; "
-            "orchestrator did not return usable pricing."
+            "BYOC pricing should be fetched via GetBYOCJobToken, not _select_price_info. "
+            "Use byoc.GetBYOCJobToken() to get pricing from the /process/token endpoint."
         )
 
     # Non-LV2V/BYOC: use general price_info first, otherwise any valid capability price.
@@ -428,6 +418,58 @@ class GetPaymentResponse:
     state: Optional[PaymentState] = None
 
 
+def _apply_ticket_params(
+    info: lp_rpc_pb2.OrchestratorInfo,
+    ticket_params: dict[str, Any],
+) -> None:
+    """Apply ticket params from a JobToken response to OrchestratorInfo.
+
+    The JobToken's ticket_params may differ from the original OrchestratorInfo,
+    especially for BYOC capabilities. This updates the info's ticket_params in place.
+
+    Args:
+        info: OrchestratorInfo to modify.
+        ticket_params: Dict from JobToken JSON with base64-encoded bytes fields.
+    """
+    if not ticket_params:
+        return
+
+    # The JSON ticket_params uses base64 encoding for bytes fields
+    def decode_b64(val: Optional[str]) -> bytes:
+        if val is None:
+            return b""
+        return base64.b64decode(val)
+
+    tp = info.ticket_params
+
+    if "recipient" in ticket_params:
+        tp.recipient = decode_b64(ticket_params["recipient"])
+    if "face_value" in ticket_params:
+        tp.face_value = decode_b64(ticket_params["face_value"])
+    if "win_prob" in ticket_params:
+        tp.win_prob = decode_b64(ticket_params["win_prob"])
+    if "recipient_rand_hash" in ticket_params:
+        tp.recipient_rand_hash = decode_b64(ticket_params["recipient_rand_hash"])
+    if "seed" in ticket_params:
+        tp.seed = decode_b64(ticket_params["seed"])
+    if "expiration_block" in ticket_params:
+        tp.expiration_block = decode_b64(ticket_params["expiration_block"])
+
+    # Handle nested expiration_params if present
+    if "expiration_params" in ticket_params and ticket_params["expiration_params"]:
+        exp = ticket_params["expiration_params"]
+        if "creation_round" in exp:
+            tp.expiration_params.creation_round = exp["creation_round"]
+        if "creation_round_block_hash" in exp:
+            tp.expiration_params.creation_round_block_hash = decode_b64(
+                exp["creation_round_block_hash"]
+            )
+        if "creation_round_initialized" in exp:
+            tp.expiration_params.creation_round_initialized = exp[
+                "creation_round_initialized"
+            ]
+
+
 def GetPayment(
     signer_base_url: str,
     info: lp_rpc_pb2.OrchestratorInfo,
@@ -437,6 +479,9 @@ def GetPayment(
     capability: Optional[str] = None,
     state: Optional[PaymentState] = None,
     manifest_id: Optional[str] = None,
+    price_per_unit: Optional[int] = None,
+    pixels_per_unit: Optional[int] = None,
+    ticket_params: Optional[dict[str, Any]] = None,
 ) -> GetPaymentResponse:
     """
     Call the remote signer to generate an automatic payment for a job.
@@ -448,6 +493,7 @@ def GetPayment(
       manifestId: optional manifest ID for the payment
 
     For BYOC jobs, pass typ="byoc" and capability="capability_name".
+    For BYOC, use price_per_unit, pixels_per_unit, and ticket_params from GetBYOCJobToken.
 
     The returned GetPaymentResponse includes the updated state which must be
     passed to subsequent calls to ensure unique ticket nonces.
@@ -472,8 +518,16 @@ def GetPayment(
         seg = base64.b64encode(seg.SerializeToString()).decode("ascii")
         return GetPaymentResponse(seg_creds=seg, payment="")
 
-    # Select the appropriate price info based on type and model_id/capability
-    price_info = _select_price_info(info, typ=typ, model_id=model_id, capability=capability)
+    # Use explicit pricing if provided (required for BYOC), otherwise select from OrchestratorInfo
+    if price_per_unit is not None and pixels_per_unit is not None:
+        # Create a simple object to hold the explicit pricing
+        price_info = lp_rpc_pb2.PriceInfo(
+            pricePerUnit=price_per_unit,
+            pixelsPerUnit=pixels_per_unit,
+        )
+    else:
+        # Select the appropriate price info based on type and model_id/capability
+        price_info = _select_price_info(info, typ=typ, model_id=model_id, capability=capability)
 
     # Validate the selected price has non-zero values
     if price_info.pricePerUnit <= 0 or price_info.pixelsPerUnit <= 0:
@@ -489,6 +543,10 @@ def GetPayment(
     info_for_payment.price_info.pixelsPerUnit = price_info.pixelsPerUnit
     info_for_payment.price_info.capability = price_info.capability
     info_for_payment.price_info.constraint = price_info.constraint
+
+    # For BYOC, update ticket_params from JobToken (may differ from OrchestratorInfo)
+    if ticket_params is not None:
+        _apply_ticket_params(info_for_payment, ticket_params)
 
     # Verify the copy worked correctly
     if info_for_payment.price_info.pricePerUnit <= 0 or info_for_payment.price_info.pixelsPerUnit <= 0:
@@ -595,10 +653,12 @@ def StartJob(
 class SignerMaterial:
     """
     Material returned by the remote signer.
-    address: 20-byte broadcaster ETH address
+    address: 20-byte broadcaster ETH address (as bytes)
+    address_hex: Original hex string with checksum (e.g., "0xAbCd...")
     sig: signature bytes (length depends on scheme; commonly 65 bytes for ECDSA)
     """
     address: bytes
+    address_hex: str
     sig: bytes
 
 
@@ -777,7 +837,7 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
 
     # check for offchain mode
     if not signer_base_url:
-        return SignerMaterial(address=None, sig=None)
+        return SignerMaterial(address=None, address_hex=None, sig=None)
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
     # Normalize to an https:// origin and append the expected path.
@@ -799,7 +859,8 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
                     cause=None,
             ) from None
 
-        address = _hex_to_bytes(str(data["address"]), expected_len=20)
+        address_hex = str(data["address"])  # preserve original checksummed string
+        address = _hex_to_bytes(address_hex, expected_len=20)
         sig = _hex_to_bytes(str(data["signature"]))  # signature length may vary
 
     except LivepeerGatewayError as e:
@@ -843,7 +904,7 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
             cause=cause if isinstance(cause, BaseException) else e,
         ) from None
 
-    return SignerMaterial(address=address, sig=sig)
+    return SignerMaterial(address=address, address_hex=address_hex, sig=sig)
 
 
 class OrchestratorClient:
