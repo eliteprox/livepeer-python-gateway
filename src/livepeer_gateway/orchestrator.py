@@ -171,44 +171,36 @@ def get_json(
     """
     return request_json(url, headers=headers, timeout=timeout)
 
-
-def _normalize_https_base_url(orch_url: str) -> str:
+def _parse_http_url(url: str, *, context: str = "URL") -> ParseResult:
     """
-    Normalize an orchestrator base URL to an https:// URL with no path/query/fragment.
-
-    Accepts:
-    - "host:port" (implicitly treated as https://host:port)
-    - "https://host:port"
-    """
-    orch_url = orch_url.strip().rstrip("/")
-    url = orch_url if "://" in orch_url else f"https://{orch_url}"
-
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
-    if not parsed.netloc:
-        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
-    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
-        raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
-    return f"https://{parsed.netloc}"
-
-
-def _normalize_https_origin(url: str) -> str:
-    """
-    Normalize a URL (possibly with a path) into an https:// origin (scheme + host:port).
+    Normalize a URL for HTTP(S) endpoints.
 
     Accepts:
     - "host:port" (implicitly https://host:port)
-    - "https://host:port[/...]" (path/query/fragment are ignored)
+    - "http://host:port[/...]"
+    - "https://host:port[/...]"
     """
     url = url.strip()
-    u = url if "://" in url else f"https://{url}"
-    parsed = urlparse(u)
-    if parsed.scheme != "https":
-        raise ValueError(f"Only https:// URLs are supported (got {parsed.scheme!r})")
+    normalized = url if "://" in url else f"https://{url}"
+    parsed = urlparse(normalized)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http:// or https:// {context}s are supported (got {parsed.scheme!r})")
     if not parsed.netloc:
-        raise ValueError(f"Invalid https URL: {url!r}")
-    return f"https://{parsed.netloc}"
+        raise ValueError(f"Invalid {context}: {url!r}")
+    return parsed
+
+
+def _http_origin(url: str) -> str:
+    """
+    Normalize a URL (possibly with a path) into a scheme:// origin (scheme + host:port).
+
+    Accepts:
+    - "host:port" (implicitly https://host:port)
+    - "http://host:port[/...]" (path/query/fragment are ignored)
+    - "https://host:port[/...]" (path/query/fragment are ignored)
+    """
+    parsed = _parse_http_url(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 @dataclass(frozen=True)
@@ -365,7 +357,7 @@ def GetPayment(
             "The orchestrator returned missing or zero price_info."
         )
 
-    base = _normalize_https_base_url(signer_base_url)
+    base = _http_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
     # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
@@ -406,7 +398,7 @@ def StartJob(
         "Livepeer-Segment": p.seg_creds,
     }
 
-    base = _normalize_https_base_url(info.transcoder)
+    base = _http_origin(info.transcoder)
     url = f"{base}/live-video-to-video"
     data = post_json(url, req.to_json(), headers=headers)
     return LiveVideoToVideo.from_json(data)
@@ -459,7 +451,7 @@ def _split_host_port(target: str) -> Tuple[str, int]:
     return host, int(port_s)
 
 
-def _normalize_grpc_target(orch_url: str) -> str:
+def _parse_grpc_target(orch_url: str) -> str:
     """
     Normalize user input into a gRPC target string suitable for grpc.secure_channel().
 
@@ -477,12 +469,11 @@ def _normalize_grpc_target(orch_url: str) -> str:
     if parsed.scheme != "https":
         raise ValueError(f"Only https:// orchestrator URLs are supported (got {parsed.scheme!r})")
     if not parsed.netloc:
-        raise ValueError(f"Invalid https orchestrator URL: {orch_url!r}")
+        raise ValueError(f"Invalid orchestrator URL: {orch_url!r}")
     if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
         # gRPC targets are host:port; ignore any path-like components by rejecting explicitly.
         raise ValueError(f"Orchestrator URL must not include a path/query/fragment: {orch_url!r}")
     return parsed.netloc
-
 
 def _is_ip_address(host: str) -> bool:
     try:
@@ -580,7 +571,7 @@ def _trust_on_first_use_root_cert(orch_url: str) -> Tuple[bytes, str, str]:
     - re-raises failures as OrchestratorRpcError with the *original* orch_url
     """
     try:
-        target = _normalize_grpc_target(orch_url)
+        target = _parse_grpc_target(orch_url)
         root_pem, authority = _trust_on_first_use_root_cert_target(target)
         return root_pem, authority, target
     except Exception as e:
@@ -604,7 +595,7 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
     # Normalize to an https:// origin and append the expected path.
-    signer_url = f"{_normalize_https_origin(signer_base_url)}/sign-orchestrator-info"
+    signer_url = f"{_http_origin(signer_base_url)}/sign-orchestrator-info"
 
     try:
         # Some signers accept/expect POST with an empty JSON object.
