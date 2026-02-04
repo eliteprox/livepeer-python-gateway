@@ -1,0 +1,75 @@
+import argparse
+import logging
+
+from livepeer_gateway.orchestrator import LivepeerGatewayError, SelectOrchestrator
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Select an orchestrator via discovery or explicit list.",
+        epilog=(
+            "Examples:\n"
+            "  # Orchestrator list\n"
+            "  python examples/select_orchestrator.py localhost:8935 localhost:8936\n"
+            "\n"
+            "  # Discover via signer URL\n"
+            "  python examples/select_orchestrator.py --signer https://signer.example.com\n"
+            "\n"
+            "  # Discover via discovery URL\n"
+            "  python examples/select_orchestrator.py --discovery https://discover.example.com/orchestrators\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "orchestrators",
+        nargs="*",
+        help="Optional list of orchestrator gRPC targets (host:port).",
+    )
+    p.add_argument(
+        "--signer",
+        default=None,
+        help="Remote signer base URL (no path). Used for signing and discovery fallback.",
+    )
+    p.add_argument(
+        "--discovery",
+        default=None,
+        help="Explicit discovery endpoint URL (overrides signer discovery).",
+    )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for selection diagnostics.",
+    )
+    return p.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
+    try:
+        orch_url, info = SelectOrchestrator(
+            args.orchestrators or None,
+            signer_url=args.signer,
+            discovery_url=args.discovery,
+        )
+        if args.orchestrators:
+            mode = "orchestrator list"
+        elif args.discovery:
+            mode = "discovery URL"
+        elif args.signer:
+            mode = "signer discovery"
+        else:
+            mode = "no options"
+
+        print("=== Selected Orchestrator ===")
+        print("Mode:", mode)
+        print("Orchestrator:", orch_url)
+        print("Transcoder URI:", info.transcoder)
+        print("ETH Address:", info.address.hex())
+    except LivepeerGatewayError as e:
+        print(f"ERROR: {e}")
+
+
+if __name__ == "__main__":
+    main()
