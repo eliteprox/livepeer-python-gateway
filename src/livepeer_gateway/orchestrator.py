@@ -370,8 +370,7 @@ def GetPayment(
     base = _http_origin(signer_base_url)
     url = f"{base}/generate-live-payment"
 
-    # base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-    pb = lp_rpc_pb2.PaymentResult(info=info).SerializeToString()
+    pb = info.SerializeToString()
     orch_b64 = base64.b64encode(pb).decode("ascii")
 
     data = post_json(url, {"orchestrator": orch_b64, "type": typ})
