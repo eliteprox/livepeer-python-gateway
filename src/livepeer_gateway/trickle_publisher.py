@@ -7,6 +7,9 @@ from typing import Optional, AsyncIterator
 import aiohttp
 
 
+_LOG = logging.getLogger(__name__)
+
+
 class TricklePublisher:
     """
     Trickle publisher that streams bytes to a sequence of HTTP POST endpoints:
@@ -59,7 +62,7 @@ class TricklePublisher:
         assert self._session is not None
 
         url = self._stream_url(seq)
-        logging.debug("Trickle preconnect: %s", url)
+        _LOG.debug("Trickle preconnect: %s", url)
 
         queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=1)
         asyncio.create_task(self._run_post(url, queue))
@@ -80,10 +83,10 @@ class TricklePublisher:
             )
             if resp.status != 200:
                 body = await resp.text()
-                logging.error("Trickle POST failed url=%s status=%s body=%r", url, resp.status, body)
+                _LOG.error("Trickle POST failed url=%s status=%s body=%r", url, resp.status, body)
             await resp.release()
         except Exception:
-            logging.error("Trickle POST exception url=%s", url, exc_info=True)
+            _LOG.error("Trickle POST exception url=%s", url, exc_info=True)
 
     async def _run_delete(self) -> None:
         await self._ensure_runtime()
@@ -93,7 +96,7 @@ class TricklePublisher:
             resp = await self._session.delete(self.url)
             await resp.release()
         except Exception:
-            logging.error("Trickle DELETE exception url=%s", self.url, exc_info=True)
+            _LOG.error("Trickle DELETE exception url=%s", self.url, exc_info=True)
 
     async def _stream_data(self, queue: asyncio.Queue[Optional[bytes]]) -> AsyncIterator[bytes]:
         while True:
@@ -159,7 +162,7 @@ class TricklePublisher:
         await self._ensure_runtime()
         assert self._lock is not None
 
-        logging.info("Trickle close: %s", self.url)
+        _LOG.debug("Trickle close: %s", self.url)
         async with self._lock:
             if self._next_writer is not None:
                 await SegmentWriter(self._next_writer).close()

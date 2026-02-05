@@ -17,6 +17,8 @@ from av.video.frame import PictureType
 from .errors import LivepeerGatewayError
 from .trickle_publisher import TricklePublisher
 
+_LOG = logging.getLogger(__name__)
+
 _OUT_TIME_BASE = Fraction(1, 90_000)
 _READ_CHUNK = 64 * 1024
 _STOP = object()
@@ -144,13 +146,13 @@ class MediaPublish:
             self._flush_encoder()
         except Exception as e:
             self._error = e
-            logging.error("MediaPublish encoder error", exc_info=True)
+            _LOG.error("MediaPublish encoder error", exc_info=True)
         finally:
             if self._container is not None:
                 try:
                     self._container.close()
                 except Exception:
-                    logging.exception("MediaPublish failed to close container")
+                    _LOG.exception("MediaPublish failed to close container")
             self._container = None
             self._video_stream = None
 
@@ -263,7 +265,7 @@ class MediaPublish:
                         break
                     await segment.write(chunk)
         except Exception:
-            logging.error("MediaPublish pipe stream failed", exc_info=True)
+            _LOG.error("MediaPublish pipe stream failed", exc_info=True)
         finally:
             try:
                 read_file.close()
