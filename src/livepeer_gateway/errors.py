@@ -10,3 +10,11 @@ class LivepeerGatewayError(RuntimeError):
 
 class NoOrchestratorAvailableError(LivepeerGatewayError):
     """Raised when no orchestrator could be selected."""
+
+
+class SignerRefreshRequired(LivepeerGatewayError):
+    """Raised when the remote signer returns HTTP 480 and a refresh is required."""
+
+
+class PaymentError(LivepeerGatewayError):
+    """Raised when a PaymentSession operation fails."""

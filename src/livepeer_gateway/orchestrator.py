@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import ipaddress
@@ -28,7 +27,8 @@ from .control import Control
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
 from .media_output import MediaOutput
-from .errors import LivepeerGatewayError, NoOrchestratorAvailableError
+from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, SignerRefreshRequired
+from .payments import PaymentSession
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
 _LOG = logging.getLogger(__name__)
@@ -120,6 +120,10 @@ def request_json(
     except HTTPError as e:
         body = _extract_error_message(e)
         body_part = f"; body={body!r}" if body else ""
+        if e.code == 480:
+            raise SignerRefreshRequired(
+                f"Signer returned HTTP 480 (refresh session required) (url={url}){body_part}"
+            ) from e
         raise LivepeerGatewayError(
             f"HTTP JSON error: HTTP {e.code} from endpoint (url={url}){body_part}"
         ) from e
@@ -243,12 +247,14 @@ class LiveVideoToVideo:
     control: Optional[Control] = None
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
+    _payment_session: Optional["PaymentSession"] = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def from_json(
         data: dict[str, Any],
         *,
         orchestrator_info: Optional[lp_rpc_pb2.OrchestratorInfo] = None,
+        payment_session: Optional["PaymentSession"] = None,
     ) -> "LiveVideoToVideo":
         control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
         control = Control(control_url) if control_url else None
@@ -265,6 +271,7 @@ class LiveVideoToVideo:
             orchestrator_info=orchestrator_info,
             control=control,
             events=events,
+            _payment_session=payment_session,
         )
 
     def start_media(self, config: MediaPublishConfig) -> MediaPublish:
@@ -309,6 +316,13 @@ class LiveVideoToVideo:
             chunk_size=chunk_size,
         )
 
+    @property
+    def payment_session(self) -> Optional["PaymentSession"]:
+        """
+        Access the PaymentSession for this job, if available.
+        """
+        return self._payment_session
+
 
     async def close(self) -> None:
         """
@@ -326,65 +340,6 @@ class LiveVideoToVideo:
         for result in results:
             if isinstance(result, BaseException):
                 raise result
-
-@dataclass(frozen=True)
-class GetPaymentResponse:
-    payment: str
-    seg_creds: Optional[str] = None
-
-
-def GetPayment(
-    signer_base_url: str,
-    info: lp_rpc_pb2.OrchestratorInfo,
-    *,
-    typ: str = "lv2v",
-) -> GetPaymentResponse:
-    """
-    Call the remote signer to generate an automatic payment for a job.
-
-    POST {signer_base_url}/generate-live-payment with:
-      orchestrator: base64 protobuf bytes of net.PaymentResult containing OrchestratorInfo
-      type: job type (default: lv2v)
-    """
-
-    if not signer_base_url:
-        # Offchain mode: still send the expected headers, but with empty content.
-        seg = lp_rpc_pb2.SegData()
-        if not info.HasField("auth_token"):
-            raise LivepeerGatewayError(
-                "Orchestrator did not provide an auth token."
-            )
-        seg.auth_token.CopyFrom(info.auth_token)
-        seg = base64.b64encode(seg.SerializeToString()).decode("ascii")
-        return GetPaymentResponse(seg_creds=seg, payment="")
-
-    # Price info must be valid
-    has_price_info = info.HasField("price_info")
-    price_is_zero = has_price_info and info.price_info.pricePerUnit == 0
-    if not has_price_info or price_is_zero:
-        raise LivepeerGatewayError(
-            "Valid price info required when using remote signer. "
-            "The orchestrator returned missing or zero price_info."
-        )
-
-    base = _http_origin(signer_base_url)
-    url = f"{base}/generate-live-payment"
-
-    pb = info.SerializeToString()
-    orch_b64 = base64.b64encode(pb).decode("ascii")
-
-    data = post_json(url, {"orchestrator": orch_b64, "type": typ})
-
-    payment = data.get("payment")
-    if not isinstance(payment, str) or not payment:
-        raise LivepeerGatewayError(f"GetPayment error: missing/invalid 'payment' in response (url={url})")
-
-    seg_creds = data.get("segCreds")
-    if seg_creds is not None and not isinstance(seg_creds, str):
-        raise LivepeerGatewayError(f"GetPayment error: invalid 'segCreds' in response (url={url})")
-
-    return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
-
 
 def start_lv2v(
     orch_url: Optional[Sequence[str] | str],
@@ -410,7 +365,12 @@ def start_lv2v(
         capabilities=capabilities,
     )
 
-    p = GetPayment(signer_base_url, info)
+    session = PaymentSession(
+        signer_base_url,
+        info,
+        capabilities=capabilities,
+    )
+    p = session.get_payment()
     headers: dict[str, str] = {
         "Livepeer-Payment": p.payment,
         "Livepeer-Segment": p.seg_creds,
@@ -422,6 +382,7 @@ def start_lv2v(
     return LiveVideoToVideo.from_json(
         data,
         orchestrator_info=info,
+        payment_session=session,
     )
 
 
