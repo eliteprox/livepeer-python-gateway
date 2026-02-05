@@ -10,8 +10,8 @@ from .orchestrator import (
     GetOrchestratorInfo,
     LiveVideoToVideo,
     SelectOrchestrator,
-    StartJob,
     StartJobRequest,
+    start_lv2v,
 )
 from .trickle_publisher import TricklePublisher
 from .trickle_subscriber import SegmentReader, TrickleSubscriber
@@ -32,8 +32,8 @@ __all__ = [
     "DecodedMediaFrame",
     "Events",
     "SelectOrchestrator",
-    "StartJob",
     "StartJobRequest",
+    "start_lv2v",
     "TricklePublisher",
     "SegmentReader",
     "TrickleSubscriber",

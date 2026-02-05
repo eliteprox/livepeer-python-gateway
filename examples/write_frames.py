@@ -5,12 +5,7 @@ from fractions import Fraction
 import av
 
 from livepeer_gateway.media_publish import MediaPublishConfig
-from livepeer_gateway.orchestrator import (
-    GetOrchestratorInfo,
-    LivepeerGatewayError,
-    StartJob,
-    StartJobRequest,
-)
+from livepeer_gateway.orchestrator import LivepeerGatewayError, StartJobRequest, start_lv2v
 
 DEFAULT_ORCH = "localhost:8935"
 DEFAULT_MODEL_ID = "noop"  # fix
@@ -54,9 +49,8 @@ async def main() -> None:
 
     job = None
     try:
-        info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
-        job = StartJob(
-            info,
+        job = start_lv2v(
+            args.orchestrator,
             StartJobRequest(model_id=args.model_id),
             signer_base_url=args.signer,
         )

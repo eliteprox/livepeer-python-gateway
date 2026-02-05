@@ -23,6 +23,7 @@ import grpc
 from . import lp_rpc_pb2
 from . import lp_rpc_pb2_grpc
 
+from .capabilities import CapabilityId, build_capabilities
 from .control import Control
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
@@ -238,12 +239,17 @@ class LiveVideoToVideo:
     subscribe_url: Optional[str] = None
     control_url: Optional[str] = None
     events_url: Optional[str] = None
+    orchestrator_info: Optional[lp_rpc_pb2.OrchestratorInfo] = None
     control: Optional[Control] = None
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
 
     @staticmethod
-    def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
+    def from_json(
+        data: dict[str, Any],
+        *,
+        orchestrator_info: Optional[lp_rpc_pb2.OrchestratorInfo] = None,
+    ) -> "LiveVideoToVideo":
         control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
         control = Control(control_url) if control_url else None
         publish_url = data.get("publish_url") if isinstance(data.get("publish_url"), str) else None
@@ -256,6 +262,7 @@ class LiveVideoToVideo:
             manifest_id=data.get("manifest_id") if isinstance(data.get("manifest_id"), str) else None,
             publish_url=publish_url,
             subscribe_url=data.get("subscribe_url") if isinstance(data.get("subscribe_url"), str) else None,
+            orchestrator_info=orchestrator_info,
             control=control,
             events=events,
         )
@@ -380,20 +387,29 @@ def GetPayment(
     return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
 
 
-def StartJob(
-    info: lp_rpc_pb2.OrchestratorInfo,
+def start_lv2v(
+    orch_url: Optional[Sequence[str] | str],
     req: StartJobRequest,
     *,
     signer_base_url: Optional[str] = None,
-    typ: str = "lv2v",
+    discovery_url: Optional[str] = None,
 ) -> LiveVideoToVideo:
     """
     Start a live video-to-video job.
 
-    Calls POST {info.transcoder}/live-video-to-video with JSON body.
+    Selects an orchestrator with LV2V capability and calls
+    POST {info.transcoder}/live-video-to-video with JSON body.
     """
     if not req.model_id:
-        raise LivepeerGatewayError("StartJob requires model_id")
+        raise LivepeerGatewayError("start_lv2v requires model_id")
+
+    capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
+    _, info = SelectOrchestrator(
+        orch_url,
+        signer_url=signer_base_url,
+        discovery_url=discovery_url,
+        capabilities=capabilities,
+    )
 
     p = GetPayment(signer_base_url, info)
     headers: dict[str, str] = {
@@ -404,7 +420,10 @@ def StartJob(
     base = _http_origin(info.transcoder)
     url = f"{base}/live-video-to-video"
     data = post_json(url, req.to_json(), headers=headers)
-    return LiveVideoToVideo.from_json(data)
+    return LiveVideoToVideo.from_json(
+        data,
+        orchestrator_info=info,
+    )
 
 
 
