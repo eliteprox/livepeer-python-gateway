@@ -15,8 +15,12 @@ Usage:
 """
 import argparse
 import asyncio
+import logging
 import signal
 import sys
+
+# Configure logging to show INFO level messages
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 from livepeer_gateway import (
     BYOCTokenRefreshConfig,
@@ -151,6 +155,11 @@ async def run_stream(args: argparse.Namespace) -> None:
     token_refresher = None
     if args.signer and stream_job.signed_job_request:
         print(f"Starting job token refresher (interval={DEFAULT_TOKEN_REFRESH_INTERVAL}s)...")
+
+        # Create refresh callback for handling HTTP 480 (session refresh required)
+        def refresh_orch_info():
+            return GetOrchestratorInfo(args.orchestrator, args.signer)
+
         token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
@@ -158,6 +167,7 @@ async def run_stream(args: argparse.Namespace) -> None:
             stream_job.stream_id,
             stream_job.signed_job_request,
             config=BYOCTokenRefreshConfig(interval_s=DEFAULT_TOKEN_REFRESH_INTERVAL),
+            refresh_info_callback=refresh_orch_info,
         )
         token_refresher.start()
 

@@ -1,8 +1,12 @@
 import argparse
 import asyncio
+import logging
 from fractions import Fraction
 
 import av
+
+# Configure logging to show INFO level messages
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 from livepeer_gateway import (
     BYOCTokenRefreshConfig,
@@ -184,6 +188,11 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     token_refresher = None
     if args.signer and stream_job.signed_job_request:
         print(f"job token refresh: enabled (interval={args.token_refresh_interval}s)")
+
+        # Create refresh callback for handling HTTP 480 (session refresh required)
+        def refresh_orch_info():
+            return GetOrchestratorInfo(args.orchestrator, args.signer)
+
         token_refresher = BYOCTokenRefresher(
             args.signer,
             info,
@@ -191,6 +200,7 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
             stream_job.stream_id,
             stream_job.signed_job_request,
             config=BYOCTokenRefreshConfig(interval_s=args.token_refresh_interval),
+            refresh_info_callback=refresh_orch_info,
         )
         token_refresher.start()
     print()

@@ -12,7 +12,7 @@ import logging
 import ssl
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -22,6 +22,7 @@ from .events import Events
 from .media_output import MediaOutput
 from .media_publish import MediaPublish, MediaPublishConfig
 from .orchestrator import (
+    GetPaymentResponse,
     PaymentState,
     _normalize_https_base_url,
 )
@@ -925,6 +926,12 @@ class BYOCTokenRefreshConfig:
 BYOCPaymentConfig = BYOCTokenRefreshConfig
 DEFAULT_BYOC_PAYMENT_INTERVAL = DEFAULT_BYOC_TOKEN_REFRESH_INTERVAL
 
+# Type alias for the refresh callback (same as live_payment.py)
+BYOCRefreshInfoCallback = Callable[[], lp_rpc_pb2.OrchestratorInfo]
+
+# Maximum consecutive session refresh attempts (matches go-livepeer)
+MAX_BYOC_REFRESH_ATTEMPTS = 3
+
 
 class BYOCTokenRefresher:
     """
@@ -932,6 +939,9 @@ class BYOCTokenRefresher:
 
     Unlike LV2V which uses pixel-based live payments sent every few seconds,
     BYOC uses a signed job token that is refreshed approximately once per minute.
+
+    When the remote signer returns HTTP 480 (SessionRefreshRequired), the
+    orchestrator info must be refreshed to get new ticket params before retrying.
     """
 
     def __init__(
@@ -944,6 +954,7 @@ class BYOCTokenRefresher:
         *,
         config: Optional[BYOCTokenRefreshConfig] = None,
         initial_state: Optional[PaymentState] = None,
+        refresh_info_callback: Optional[BYOCRefreshInfoCallback] = None,
     ) -> None:
         """Initialize the BYOC token refresher.
 
@@ -955,6 +966,7 @@ class BYOCTokenRefresher:
             signed_job_request: The signed job request (base64) from StartBYOCStream.
             config: Token refresh configuration (interval, etc.).
             initial_state: Previous payment state for nonce continuity.
+            refresh_info_callback: Optional callback to get fresh OrchestratorInfo on 480.
         """
         import asyncio
 
@@ -964,6 +976,7 @@ class BYOCTokenRefresher:
         self._stream_id = stream_id
         self._signed_job_request = signed_job_request
         self._config = config or BYOCTokenRefreshConfig()
+        self._refresh_info_callback = refresh_info_callback
 
         self._task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
@@ -1064,8 +1077,6 @@ class BYOCTokenRefresher:
 
     async def _refresh_token(self) -> None:
         """Refresh the job token by sending it to the orchestrator."""
-        import asyncio
-
         # Check if capability has zero price - skip refresh if so
         try:
             job_token = GetBYOCJobToken(self._orch_info, self._capability, self._signer_url)
@@ -1098,16 +1109,8 @@ class BYOCTokenRefresher:
         )
 
         # Get fresh payment credentials from remote signer for the new token
-        def do_get_payment():
-            return GetBYOCPayment(
-                self._signer_url,
-                self._orch_info,
-                self._capability,
-                state=self._payment_state,
-                manifest_id=self._capability,  # Use capability as manifest for balance tracking
-            )
-
-        payment_resp = await asyncio.to_thread(do_get_payment)
+        # Handle 480 (SessionRefreshRequired) by refreshing orchestrator info and retrying
+        payment_resp = await self._get_payment_with_refresh()
 
         # Update state from response for next refresh
         if payment_resp.state is not None:
@@ -1122,6 +1125,74 @@ class BYOCTokenRefresher:
         await self._send_refreshed_token(payment_resp.payment)
 
         self._last_refresh_time = now
+
+    async def _get_payment_with_refresh(self) -> GetPaymentResponse:
+        """
+        Get payment from signer, handling 480 (SessionRefreshRequired) by
+        refreshing orchestrator info and retrying.
+
+        Matches go-livepeer behavior: max 3 consecutive session refreshes.
+        """
+        import asyncio
+
+        from .errors import LivepeerGatewayError, SessionRefreshRequired
+
+        for attempt in range(MAX_BYOC_REFRESH_ATTEMPTS + 1):
+            try:
+
+                def do_get_payment():
+                    return GetBYOCPayment(
+                        self._signer_url,
+                        self._orch_info,
+                        self._capability,
+                        state=self._payment_state,
+                        manifest_id=self._capability,
+                    )
+
+                return await asyncio.to_thread(do_get_payment)
+
+            except SessionRefreshRequired:
+                if attempt >= MAX_BYOC_REFRESH_ATTEMPTS:
+                    raise LivepeerGatewayError(
+                        f"Too many consecutive session refreshes ({MAX_BYOC_REFRESH_ATTEMPTS}) "
+                        f"for capability={self._capability}, stream_id={self._stream_id}"
+                    )
+
+                logging.info(
+                    "Session refresh required (480), refreshing orchestrator info: "
+                    "capability=%s, stream_id=%s, attempt=%d",
+                    self._capability,
+                    self._stream_id,
+                    attempt + 1,
+                )
+
+                # Refresh orchestrator info using the callback
+                if self._refresh_info_callback is None:
+                    raise LivepeerGatewayError(
+                        "Session refresh required (480) but no refresh callback provided. "
+                        "Pass refresh_info_callback to BYOCTokenRefresher."
+                    )
+
+                try:
+                    # Run refresh in thread pool since it's synchronous
+                    self._orch_info = await asyncio.to_thread(self._refresh_info_callback)
+                    logging.info(
+                        "Orchestrator info refreshed: capability=%s, stream_id=%s",
+                        self._capability,
+                        self._stream_id,
+                    )
+                except Exception as e:
+                    logging.error(
+                        "Failed to refresh orchestrator info: %s, capability=%s, stream_id=%s",
+                        e,
+                        self._capability,
+                        self._stream_id,
+                    )
+                    raise
+
+                # Continue to retry with refreshed info
+
+        raise LivepeerGatewayError("Unexpected: exhausted refresh retry loop")
 
     async def _send_refreshed_token(self, payment: str) -> None:
         """Send the refreshed job token to the orchestrator's payment endpoint."""
@@ -1154,12 +1225,11 @@ class BYOCTokenRefresher:
                 return resp.read()
 
         try:
-            response_data = await asyncio.to_thread(do_request)
-            logging.debug(
-                "BYOC job token refreshed: capability=%s, stream_id=%s, response_len=%d",
+            _ = await asyncio.to_thread(do_request)
+            logging.info(
+                "BYOC job token refreshed: capability=%s, stream_id=%s",
                 self._capability,
                 self._stream_id,
-                len(response_data),
             )
         except Exception as e:
             logging.error(
