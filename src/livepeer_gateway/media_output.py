@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import queue
 from contextlib import suppress
 from typing import AsyncIterator, Optional
 
@@ -116,6 +117,90 @@ class MediaOutput:
                         break
                     if isinstance(item, DecodedMediaFrame):
                         yield item
+            finally:
+                decoder.stop()
+                if not producer_task.done():
+                    producer_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await producer_task
+                await asyncio.to_thread(decoder.join)
+
+        return _iter()
+
+    def latest_video_frames(
+        self,
+    ) -> AsyncIterator[VideoDecodedMediaFrame]:
+        """
+        Read the trickle media channel and yield only the latest video frame.
+        
+        This method drains any buffered frames and yields only the most recent
+        video frame, making it suitable for real-time applications where you
+        want to display the freshest frame without processing lag.
+        
+        If multiple frames are buffered, intermediate frames are discarded.
+        """
+
+        async def _iter() -> AsyncIterator[VideoDecodedMediaFrame]:
+            decoder = MpegTsDecoder()
+            output = decoder.output_queue()
+            decoder.start()
+
+            async def _feed() -> None:
+                async for chunk in self._iter_bytes():
+                    decoder.feed(chunk)
+                decoder.close()
+
+            producer_task = asyncio.create_task(_feed())
+            try:
+                while True:
+                    # Get at least one item (blocking)
+                    item = await asyncio.to_thread(output.get)
+                    err = decoder_error(item)
+                    if err is not None:
+                        raise LivepeerGatewayError(
+                            f"Media decode error: {err.__class__.__name__}: {err}"
+                        ) from err
+                    if is_decoder_end(item):
+                        if producer_task.done():
+                            exc = producer_task.exception()
+                            if exc:
+                                raise exc
+                        break
+                    
+                    # Drain queue to get the latest frame
+                    latest_video: VideoDecodedMediaFrame | None = None
+                    if isinstance(item, VideoDecodedMediaFrame):
+                        latest_video = item
+                    
+                    # Non-blocking drain of any additional buffered frames
+                    drained = 0
+                    while True:
+                        try:
+                            next_item = output.get_nowait()
+                            drained += 1
+                            err = decoder_error(next_item)
+                            if err is not None:
+                                raise LivepeerGatewayError(
+                                    f"Media decode error: {err.__class__.__name__}: {err}"
+                                ) from err
+                            if is_decoder_end(next_item):
+                                # Yield latest before ending
+                                if latest_video is not None:
+                                    yield latest_video
+                                if producer_task.done():
+                                    exc = producer_task.exception()
+                                    if exc:
+                                        raise exc
+                                return
+                            if isinstance(next_item, VideoDecodedMediaFrame):
+                                latest_video = next_item
+                        except queue.Empty:
+                            # Queue empty, no more items to drain
+                            break
+                    
+                    # Yield only the latest video frame
+                    if latest_video is not None:
+                        yield latest_video
             finally:
                 decoder.stop()
                 if not producer_task.done():

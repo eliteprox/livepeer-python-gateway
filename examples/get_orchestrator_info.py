@@ -2,7 +2,9 @@ import argparse
 import logging
 
 from livepeer_gateway.capabilities import (
+    ExternalCapability,
     compute_available,
+    fetch_external_capabilities,
     format_capability,
     get_capacity_in_use,
     get_per_capability_map,
@@ -12,6 +14,7 @@ from livepeer_gateway.orchestrator import (
     GetOrchestratorInfo,
     LivepeerGatewayError,
 )
+
 
 
 def _parse_args() -> argparse.Namespace:
@@ -185,9 +188,29 @@ def main() -> None:
                 print("Hardware / GPU: not provided")
                 print()
 
-    except LivepeerGatewayError as e:
-        print(f"ERROR: {e}")
-        print()
+            # Display external/BYOC capabilities (fetched via HTTP endpoint)
+            try:
+                ext_caps = fetch_external_capabilities(orch_url)
+            except Exception as e:
+                print(f"External/BYOC Capabilities: failed to fetch ({e})")
+                ext_caps = []
+            if ext_caps:
+                print("External/BYOC Capabilities:")
+                for cap in ext_caps:
+                    available = cap.capacity_available
+                    print(f"- {cap.name}")
+                    if cap.description:
+                        print(f"    Description: {cap.description}")
+                    print(f"    Capacity: {cap.capacity} (in use: {cap.capacity_in_use}, available: {available})")
+                    # Note: Pricing is fetched separately via GetBYOCJobToken
+                print()
+            else:
+                print("External/BYOC Capabilities: none advertised")
+                print()
+
+        except LivepeerGatewayError as e:
+            print(f"ERROR ({orch_url}): {e}")
+            print()
 
 def format_bytes(num_bytes: int) -> str:
     if num_bytes < 0:

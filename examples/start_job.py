@@ -9,6 +9,7 @@ from livepeer_gateway import (
     StartJobRequest,
 )
 
+DEFAULT_ORCH = "localhost:8935"
 DEFAULT_MODEL_ID = "noop"
 
 

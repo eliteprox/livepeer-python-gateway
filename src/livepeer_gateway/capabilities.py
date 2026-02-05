@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import json
+import ssl
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Mapping, Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 from enum import IntEnum
 from typing import Any, Mapping, Optional
 
@@ -136,4 +143,120 @@ def build_capabilities(
     if constraint:
         caps.constraints.PerCapability[cap_id].models[constraint]
     return caps
+
+
+@dataclass
+class ExternalCapability:
+    """Represents an external/BYOC capability offered by an orchestrator.
+
+    Note: Pricing is not included here. Use byoc.GetBYOCJobToken() to fetch
+    accurate per-sender pricing from the orchestrator's /process/token endpoint.
+    """
+
+    name: str
+    description: str
+    capacity: int
+    capacity_in_use: int
+
+    @property
+    def capacity_available(self) -> int:
+        """Return the available capacity (total - in use)."""
+        return compute_available(self.capacity, self.capacity_in_use)
+
+
+def get_external_capabilities(
+    info: lp_rpc_pb2.OrchestratorInfo,
+) -> list[ExternalCapability]:
+    """Extract external/BYOC capabilities from OrchestratorInfo.
+
+    Args:
+        info: The OrchestratorInfo protobuf message from gRPC response.
+
+    Returns:
+        List of ExternalCapability instances parsed from the info.
+
+    Note: Pricing is not included in the returned capabilities.
+    Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
+
+    Deprecated: Use fetch_external_capabilities() instead, which fetches
+    capabilities directly from the orchestrator's HTTP endpoint.
+    """
+    result: list[ExternalCapability] = []
+    ext_caps = getattr(info, "external_capabilities", None)
+    if ext_caps is None:
+        return result
+
+    for cap in ext_caps:
+        result.append(
+            ExternalCapability(
+                name=getattr(cap, "name", ""),
+                description=getattr(cap, "description", ""),
+                capacity=getattr(cap, "capacity", 0),
+                capacity_in_use=getattr(cap, "capacity_in_use", 0)
+                or getattr(cap, "capacityInUse", 0),
+            )
+        )
+    return result
+
+
+def fetch_external_capabilities(
+    orch_url: str,
+    timeout: float = 10.0,
+    ssl_context: Optional[ssl.SSLContext] = None,
+) -> list[ExternalCapability]:
+    """Fetch external/BYOC capabilities from orchestrator's HTTP endpoint.
+
+    Args:
+        orch_url: The orchestrator URL (e.g., "https://10.10.7.61:8933").
+        timeout: Request timeout in seconds.
+        ssl_context: Optional SSL context for HTTPS connections.
+
+    Returns:
+        List of ExternalCapability instances.
+
+    Raises:
+        Exception: If the request fails or returns invalid data.
+
+    Note: Pricing is not included in the returned capabilities.
+    Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
+    """
+    # Normalize URL
+    url = orch_url.rstrip("/") + "/byoc/capabilities"
+
+    # Create SSL context if not provided (allow self-signed certs)
+    if ssl_context is None:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+    request = Request(url, method="GET")
+    request.add_header("Accept", "application/json")
+
+    try:
+        with urlopen(request, timeout=timeout, context=ssl_context) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise Exception(
+            f"Failed to fetch capabilities from {url}: HTTP {e.code} - {body}"
+        ) from e
+    except URLError as e:
+        raise Exception(f"Failed to connect to {url}: {e.reason}") from e
+
+    result: list[ExternalCapability] = []
+    for cap in data:
+        result.append(
+            ExternalCapability(
+                name=cap.get("name", ""),
+                description=cap.get("description", ""),
+                capacity=cap.get("capacity", 0),
+                capacity_in_use=cap.get("capacity_in_use", 0)
+                or cap.get("capacityInUse", 0),
+            )
+        )
+    return result
 
