@@ -1,6 +1,50 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from enum import IntEnum
+from typing import Any, Mapping, Optional
+
+from . import lp_rpc_pb2
+
+
+class CapabilityId(IntEnum):
+    INVALID = -2
+    UNUSED = -1
+    H264 = 0
+    MPEGTS = 1
+    MP4 = 2
+    FRACTIONAL_FRAMERATES = 3
+    STORAGE_DIRECT = 4
+    STORAGE_S3 = 5
+    STORAGE_GCS = 6
+    H264_BASELINE_PROFILE = 7
+    H264_MAIN_PROFILE = 8
+    H264_HIGH_PROFILE = 9
+    H264_CONSTRAINED_CONTAINED_HIGH_PROFILE = 10
+    GOP = 11
+    AUTH_TOKEN = 12
+    MPEG7_SIGNATURE = 14
+    HEVC_DECODE = 15
+    HEVC_ENCODE = 16
+    VP8_DECODE = 17
+    VP9_DECODE = 18
+    VP8_ENCODE = 19
+    VP9_ENCODE = 20
+    H264_DECODE_YUV444_8BIT = 21
+    H264_DECODE_YUV422_8BIT = 22
+    H264_DECODE_YUV444_10BIT = 23
+    H264_DECODE_YUV422_10BIT = 24
+    H264_DECODE_YUV420_10BIT = 25
+    SEGMENT_SLICING = 26
+    TEXT_TO_IMAGE = 27
+    IMAGE_TO_IMAGE = 28
+    IMAGE_TO_VIDEO = 29
+    UPSCALE = 30
+    AUDIO_TO_TEXT = 31
+    SEGMENT_ANYTHING_2 = 32
+    LLM = 33
+    IMAGE_TO_TEXT = 34
+    LIVE_VIDEO_TO_VIDEO = 35
+    TEXT_TO_SPEECH = 36
 
 CAPABILITY_ID_TO_NAME: dict[int, str] = {
     -2: "Invalid",
@@ -77,4 +121,19 @@ def get_capacity_in_use(model_constraint: Any) -> int:
     if hasattr(model_constraint, "capacity_in_use"):
         return int(getattr(model_constraint, "capacity_in_use") or 0)
     return 0
+
+
+def build_capabilities(
+    capability: CapabilityId,
+    constraint: Optional[str],
+) -> lp_rpc_pb2.Capabilities:
+    """
+    Build a capabilities message with an optional per-capability model constraint.
+    """
+    caps = lp_rpc_pb2.Capabilities()
+    cap_id = int(capability)
+    caps.capacities[cap_id] = 1
+    if constraint:
+        caps.constraints.PerCapability[cap_id].models[constraint]
+    return caps
 

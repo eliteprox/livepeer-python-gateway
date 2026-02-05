@@ -1,3 +1,4 @@
+from .capabilities import CapabilityId, build_capabilities
 from .control import Control
 from .errors import LivepeerGatewayError, NoOrchestratorAvailableError
 from .events import Events
@@ -17,6 +18,8 @@ from .trickle_subscriber import SegmentReader, TrickleSubscriber
 
 __all__ = [
     "Control",
+    "CapabilityId",
+    "build_capabilities",
     "DiscoverOrchestrators",
     "GetOrchestratorInfo",
     "LiveVideoToVideo",

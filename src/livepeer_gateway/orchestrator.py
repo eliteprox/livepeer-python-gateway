@@ -669,9 +669,11 @@ class OrchestratorClient:
         orch_url: str,
         *,
         signer_url: Optional[str] = None,
+        capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
     ) -> None:
         self.orch_url = orch_url
         self.signer_url = signer_url
+        self.capabilities = capabilities
 
         # Always use TLS. "Ignore" invalid/self-signed certs by trusting the exact
         # certificate the server presents (trust-on-first-use) and overriding the
@@ -704,8 +706,9 @@ class OrchestratorClient:
             address=signer.address,
             sig=signer.sig,
             ignoreCapacityCheck=True,
-            # capabilities=...  # can be added later
         )
+        if self.capabilities is not None:
+            request.capabilities.CopyFrom(self.capabilities)
 
         try:
             return self._stub.GetOrchestrator(request, timeout=5.0)
@@ -727,14 +730,23 @@ class OrchestratorClient:
             raise OrchestratorRpcError(self.orch_url, f"{code}: {msg}", cause=e) from None
 
 
-def GetOrchestratorInfo(orch_url: str, *, signer_url: Optional[str] = None) -> lp_rpc_pb2.OrchestratorInfo:
+def GetOrchestratorInfo(
+    orch_url: str,
+    *,
+    signer_url: Optional[str] = None,
+    capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
+) -> lp_rpc_pb2.OrchestratorInfo:
     """
     Public functional API:
         GetOrchestratorInfo(orch_url, signer_url=...)
     Remote signer is called once per process (cached).
     Always uses secure channel (TLS) with certificate verification disabled.
     """
-    return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo()
+    return OrchestratorClient(
+        orch_url,
+        signer_url=signer_url,
+        capabilities=capabilities,
+    ).GetOrchestratorInfo()
 
 
 def DiscoverOrchestrators(
@@ -815,6 +827,7 @@ def SelectOrchestrator(
     *,
     signer_url: Optional[str] = None,
     discovery_url: Optional[str] = None,
+    capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
 ) -> Tuple[str, lp_rpc_pb2.OrchestratorInfo]:
     """
     Select an orchestrator by trying up to ~5 candidates in parallel.
@@ -838,7 +851,12 @@ def SelectOrchestrator(
     _LOG.debug("SelectOrchestrator trying candidates: %s", candidates)
     with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
         futures = {
-            executor.submit(GetOrchestratorInfo, url, signer_url=signer_url): url
+            executor.submit(
+                GetOrchestratorInfo,
+                url,
+                signer_url=signer_url,
+                capabilities=capabilities,
+            ): url
             for url in candidates
         }
 
