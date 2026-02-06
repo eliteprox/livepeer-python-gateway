@@ -47,7 +47,7 @@ def main() -> None:
             StartJobRequest(
                 model_id=args.model,
             ),
-            signer_base_url=args.signer,
+            signer_url=args.signer,
             discovery_url=args.discovery,
         )
         orch = job.orchestrator_info

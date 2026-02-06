@@ -57,7 +57,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--signer",
         default=None,
-        help="Remote signer base URL (no path). If omitted, runs in offchain mode.",
+        help="Remote signer URL (no path). If omitted, runs in offchain mode.",
     )
     p.add_argument(
         "--model",
@@ -344,7 +344,7 @@ async def main() -> None:
         job = start_lv2v(
             args.orchestrator,
             StartJobRequest(model_id=args.model),
-            signer_base_url=args.signer,
+            signer_url=args.signer,
         )
 
         print("=== LiveVideoToVideo ===")

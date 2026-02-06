@@ -345,7 +345,7 @@ def start_lv2v(
     orch_url: Optional[Sequence[str] | str],
     req: StartJobRequest,
     *,
-    signer_base_url: Optional[str] = None,
+    signer_url: Optional[str] = None,
     discovery_url: Optional[str] = None,
 ) -> LiveVideoToVideo:
     """
@@ -360,13 +360,13 @@ def start_lv2v(
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
     _, info = SelectOrchestrator(
         orch_url,
-        signer_url=signer_base_url,
+        signer_url=signer_url,
         discovery_url=discovery_url,
         capabilities=capabilities,
     )
 
     session = PaymentSession(
-        signer_base_url,
+        signer_url,
         info,
         capabilities=capabilities,
     )
@@ -565,19 +565,19 @@ def _trust_on_first_use_root_cert(orch_url: str) -> Tuple[bytes, str, str]:
 
 
 @lru_cache(maxsize=None)
-def _get_signer_material(signer_base_url: str) -> SignerMaterial:
+def _get_signer_material(signer_url: str) -> SignerMaterial:
     """
-    Fetch signer material exactly once per signer_base_url for the lifetime of the process.
+    Fetch signer material exactly once per signer_url for the lifetime of the process.
     Subsequent calls return cached data.
     """
 
     # check for offchain mode
-    if not signer_base_url:
+    if not signer_url:
         return SignerMaterial(address=None, sig=None)
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
     # Normalize to an https:// origin and append the expected path.
-    signer_url = f"{_http_origin(signer_base_url)}/sign-orchestrator-info"
+    signer_url = f"{_http_origin(signer_url)}/sign-orchestrator-info"
 
     try:
         # Some signers accept/expect POST with an empty JSON object.
