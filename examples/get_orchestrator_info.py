@@ -7,11 +7,8 @@ from livepeer_gateway.capabilities import (
     get_capacity_in_use,
     get_per_capability_map,
 )
-from livepeer_gateway.orchestrator import (
-    DiscoverOrchestrators,
-    GetOrchestratorInfo,
-    LivepeerGatewayError,
-)
+from livepeer_gateway import get_orch_info
+from livepeer_gateway.orchestrator import DiscoverOrchestrators, LivepeerGatewayError
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -69,7 +66,7 @@ def main() -> None:
 
         for orch_url in orch_list:
             try:
-                info = GetOrchestratorInfo(orch_url, signer_url=args.signer)
+                info = get_orch_info(orch_url, signer_url=args.signer)
             except LivepeerGatewayError as e:
                 print("=== OrchestratorInfo ===")
                 print("Orchestrator:", orch_url)

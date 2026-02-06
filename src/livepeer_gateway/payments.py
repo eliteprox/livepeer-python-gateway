@@ -1,20 +1,141 @@
 from __future__ import annotations
 
 import base64
+import json
+import re
 import ssl
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from . import lp_rpc_pb2
-from .errors import PaymentError, SignerRefreshRequired
+from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired
 
 
 @dataclass(frozen=True)
 class GetPaymentResponse:
     payment: str
     seg_creds: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SignerMaterial:
+    """
+    Material returned by the remote signer.
+    address: 20-byte broadcaster ETH address
+    sig: signature bytes (length depends on scheme; commonly 65 bytes for ECDSA)
+    """
+    address: bytes
+    sig: bytes
+
+
+@dataclass
+class RemoteSignerError(LivepeerGatewayError):
+    signer_url: str
+    message: str
+    cause: Optional[BaseException] = None
+
+    def __str__(self) -> str:
+        return f"Remote signer error: {self.message} (url={self.signer_url})"
+
+
+_HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
+
+
+def _hex_to_bytes(s: str, *, expected_len: Optional[int] = None) -> bytes:
+    s = s.strip()
+    if not _HEX_RE.match(s):
+        raise ValueError(f"Not a hex string: {s!r}")
+    if s.startswith(("0x", "0X")):
+        s = s[2:]
+    if len(s) % 2 == 1:
+        # allow odd-length hex (pad left)
+        s = "0" + s
+    b = bytes.fromhex(s)
+    if expected_len is not None and len(b) != expected_len:
+        raise ValueError(f"Expected {expected_len} bytes, got {len(b)} bytes")
+    return b
+
+
+@lru_cache(maxsize=None)
+def get_orch_info_sig(signer_url: str) -> SignerMaterial:
+    """
+    Fetch signer material exactly once per signer_url for the lifetime of the process.
+    Subsequent calls return cached data.
+    """
+    from .orchestrator import _extract_error_message, _http_origin, post_json
+
+    # check for offchain mode
+    if not signer_url:
+        return SignerMaterial(address=None, sig=None)
+
+    # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
+    # Normalize to an https:// origin and append the expected path.
+    signer_url = f"{_http_origin(signer_url)}/sign-orchestrator-info"
+
+    try:
+        # Some signers accept/expect POST with an empty JSON object.
+        data = post_json(signer_url, {}, timeout=5.0)
+
+        # Expected response shape (example):
+        # {
+        #   "address": "0x0123...abcd",   # 20-byte ETH address hex
+        #   "signature": "0x..."          # signature hex
+        # }
+        if "address" not in data or "signature" not in data:
+            raise RemoteSignerError(
+                signer_url,
+                f"Remote signer JSON must contain 'address' and 'signature': {data!r}",
+                cause=None,
+            ) from None
+
+        address = _hex_to_bytes(str(data["address"]), expected_len=20)
+        sig = _hex_to_bytes(str(data["signature"]))  # signature length may vary
+
+    except LivepeerGatewayError as e:
+        # post_json wraps the underlying exception as __cause__; convert back into
+        # a signer-specific error message.
+        cause = e.__cause__ or e
+
+        if isinstance(cause, HTTPError):
+            body = _extract_error_message(cause)
+            body_part = f"; body={body!r}" if body else ""
+            raise RemoteSignerError(
+                signer_url,
+                f"HTTP {cause.code} from signer{body_part}",
+                cause=cause,
+            ) from None
+
+        if isinstance(cause, ConnectionRefusedError):
+            raise RemoteSignerError(
+                signer_url,
+                "connection refused (is the signer running? is the host/port correct?)",
+                cause=cause,
+            ) from None
+
+        if isinstance(cause, URLError):
+            raise RemoteSignerError(
+                signer_url,
+                f"failed to reach signer: {getattr(cause, 'reason', cause)}",
+                cause=cause,
+            ) from None
+
+        if isinstance(cause, json.JSONDecodeError):
+            raise RemoteSignerError(
+                signer_url,
+                f"signer did not return valid JSON: {cause}",
+                cause=cause,
+            ) from None
+
+        raise RemoteSignerError(
+            signer_url,
+            f"unexpected error: {cause.__class__.__name__}: {cause}",
+            cause=cause if isinstance(cause, BaseException) else e,
+        ) from None
+
+    return SignerMaterial(address=address, sig=sig)
 
 
 class PaymentSession:
@@ -101,9 +222,9 @@ class PaymentSession:
                     raise PaymentError(
                         "OrchestratorInfo missing transcoder URL for refresh"
                     )
-                from .orchestrator import GetOrchestratorInfo
+                from .orch_info import get_orch_info
 
-                self._info = GetOrchestratorInfo(
+                self._info = get_orch_info(
                     self._info.transcoder,
                     signer_url=self._signer_url,
                     capabilities=self._capabilities,

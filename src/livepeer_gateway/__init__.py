@@ -5,9 +5,9 @@ from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
 from .media_decode import AudioDecodedMediaFrame, DecodedMediaFrame, VideoDecodedMediaFrame
 from .media_output import MediaOutput
+from .orch_info import get_orch_info
 from .orchestrator import (
     DiscoverOrchestrators,
-    GetOrchestratorInfo,
     LiveVideoToVideo,
     SelectOrchestrator,
     StartJobRequest,
@@ -22,7 +22,7 @@ __all__ = [
     "CapabilityId",
     "build_capabilities",
     "DiscoverOrchestrators",
-    "GetOrchestratorInfo",
+    "get_orch_info",
     "LiveVideoToVideo",
     "LivepeerGatewayError",
     "NoOrchestratorAvailableError",
