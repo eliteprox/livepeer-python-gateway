@@ -12,7 +12,12 @@ from urllib.request import Request, urlopen
 
 from . import lp_rpc_pb2
 
-from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, SignerRefreshRequired
+from .errors import (
+    LivepeerGatewayError,
+    NoOrchestratorAvailableError,
+    SignerRefreshRequired,
+    SkipPaymentCycle,
+)
 from .orch_info import get_orch_info
 from .payments import RemoteSignerError
 
@@ -108,6 +113,10 @@ def request_json(
         if e.code == 480:
             raise SignerRefreshRequired(
                 f"Signer returned HTTP 480 (refresh session required) (url={url}){body_part}"
+            ) from e
+        if e.code == 482:
+            raise SkipPaymentCycle(
+                f"Signer returned HTTP 482 (skip payment cycle) (url={url}){body_part}"
             ) from e
         raise LivepeerGatewayError(
             f"HTTP JSON error: HTTP {e.code} from endpoint (url={url}){body_part}"

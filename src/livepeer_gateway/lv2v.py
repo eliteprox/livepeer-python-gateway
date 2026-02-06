@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
 from . import lp_rpc_pb2
 from .capabilities import CapabilityId, build_capabilities
 from .control import Control
-from .errors import LivepeerGatewayError
+from .errors import LivepeerGatewayError, SkipPaymentCycle
 from .events import Events
 from .media_output import MediaOutput
 from .media_publish import MediaPublish, MediaPublishConfig
@@ -203,6 +204,7 @@ async def _payment_sender(
     Runs until the trickle stream ends or the task is cancelled.
     Payment errors are logged but do not stop the loop.
     """
+    last_payment_at = 0.0
     async with TrickleSubscriber(
         subscribe_url,
         connection_close=True,
@@ -214,8 +216,18 @@ async def _payment_sender(
                 return
             seq = segment.seq()
             try:
-                _LOG.debug("Payment sender: sending payment for seq=%s", seq)
-                await asyncio.to_thread(session.send_payment)
+                now = time.monotonic()
+                if now - last_payment_at >= 5.0:
+                    _LOG.debug("Payment sender: sending payment for seq=%s", seq)
+                    # TODO make async-native
+                    await asyncio.to_thread(session.send_payment)
+                    last_payment_at = now
+            except SkipPaymentCycle as e:
+                _LOG.debug(
+                    "Payment sender: skipping payment for seq=%s (%s)",
+                    seq,
+                    e,
+                )
             except Exception:
                 _LOG.exception("Payment sender: failed for seq=%s", seq)
             finally:
