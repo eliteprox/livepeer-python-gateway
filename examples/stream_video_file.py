@@ -52,6 +52,7 @@ from livepeer_gateway import (
     MediaPublishConfig,
     StartBYOCStreamWithRetry,
     StopBYOCStream,
+    TrickleSubscriber,
     fetch_external_capabilities,
 )
 
@@ -119,6 +120,11 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override the source frame rate. If omitted, uses the video's native FPS.",
+    )
+    p.add_argument(
+        "--enable-data-output",
+        action="store_true",
+        help="Enable data output channel (e.g. for text/transcription output).",
     )
     p.add_argument(
         "--token-refresh-interval",
@@ -294,6 +300,42 @@ async def _record_output(
         print(msg)
 
 
+async def _subscribe_data_channel(
+    data_url: str,
+    stop_event: asyncio.Event,
+) -> None:
+    """Subscribe to the data output channel and print text segments as they arrive."""
+    sub = TrickleSubscriber(data_url)
+    segment_count = 0
+
+    try:
+        while not stop_event.is_set():
+            segment = await sub.next()
+            if segment is None:
+                break
+
+            # Read all chunks for this segment
+            data = b""
+            while True:
+                chunk = await segment.read()
+                if chunk is None:
+                    break
+                data += chunk
+
+            if data:
+                segment_count += 1
+                text = data.decode("utf-8", errors="replace")
+                print(f"  [data #{segment_count}] {text}")
+
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.warning("Data channel error: %s", e)
+    finally:
+        await sub.close()
+        print(f"Data channel finished: {segment_count} segments received")
+
+
 async def run(args: argparse.Namespace) -> None:
     print(f"Input file  : {args.input_file}")
     print(f"Capability  : {args.capability}")
@@ -351,6 +393,7 @@ async def run(args: argparse.Namespace) -> None:
         params=stream_params,
         enable_video_ingress=True,
         enable_video_egress=True,
+        enable_data_output=args.enable_data_output,
     )
     stream_job = StartBYOCStreamWithRetry(
         info,
@@ -375,6 +418,7 @@ async def run(args: argparse.Namespace) -> None:
     print("subscribe_url:", stream_job.subscribe_url)
     print("control_url :", stream_job.control_url)
     print("events_url  :", stream_job.events_url)
+    print("data_url    :", stream_job.data_url or "N/A")
 
     # --- Token refresher (payments) ---
     token_refresher = None
@@ -407,6 +451,7 @@ async def run(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGTERM, _on_signal)
 
     record_task: Optional[asyncio.Task] = None
+    data_task: Optional[asyncio.Task] = None
 
     try:
         if not stream_job.publish_url:
@@ -432,6 +477,13 @@ async def run(args: argparse.Namespace) -> None:
                     audio_sample_rate=media_info.audio_sample_rate,
                     audio_layout=media_info.audio_layout,
                 )
+            )
+
+        # Start data channel subscriber if data output is enabled
+        if stream_job.data_url:
+            print(f"Subscribing to data channel: {stream_job.data_url}")
+            data_task = asyncio.create_task(
+                _subscribe_data_channel(stream_job.data_url, stop_event)
             )
 
         # Read and publish frames from the media file (video + audio)
@@ -492,6 +544,13 @@ async def run(args: argparse.Namespace) -> None:
             record_task.cancel()
             with suppress(asyncio.CancelledError):
                 await record_task
+
+        # Cancel data channel task
+        if data_task is not None:
+            stop_event.set()
+            data_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await data_task
 
         # Stop token refresher
         if token_refresher:
