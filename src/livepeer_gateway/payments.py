@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import ssl
 from dataclasses import dataclass
@@ -11,8 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from . import lp_rpc_pb2
-from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired
-
+from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired, SkipPaymentCycle
+_LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class GetPaymentResponse:
@@ -42,7 +43,6 @@ class RemoteSignerError(LivepeerGatewayError):
 
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
-
 
 def _hex_to_bytes(s: str, *, expected_len: Optional[int] = None) -> bytes:
     s = s.strip()

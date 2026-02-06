@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import socket
 import ssl
@@ -16,6 +17,8 @@ from . import lp_rpc_pb2
 from . import lp_rpc_pb2_grpc
 from .errors import LivepeerGatewayError
 from .payments import get_orch_info_sig
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,6 +87,12 @@ def get_orch_info(
     Remote signer is called once per process (cached).
     Always uses secure channel (TLS) with certificate verification disabled.
     """
+    _LOG.debug(
+        "Fetching orchestrator info orch=%s",
+        orch_url,
+        signer_url or "",
+        "set" if capabilities is not None else "none",
+    )
     try:
         signer = get_orch_info_sig(signer_url)
     except Exception as e:
