@@ -11,8 +11,9 @@ from fractions import Fraction
 
 import av
 
+from livepeer_gateway.errors import LivepeerGatewayError
+from livepeer_gateway.lv2v import StartJobRequest, start_lv2v
 from livepeer_gateway.media_publish import MediaPublishConfig
-from livepeer_gateway.orchestrator import LivepeerGatewayError, StartJobRequest, start_lv2v
 
 DEFAULT_MODEL_ID = "noop" # fix
 DEFAULT_DEVICE = "0"
