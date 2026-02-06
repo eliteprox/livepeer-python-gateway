@@ -9,6 +9,7 @@ import av
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 from livepeer_gateway import (
+    BYOCStreamRequest,
     BYOCTokenRefreshConfig,
     BYOCTokenRefresher,
     GetBYOCJobToken,
@@ -154,14 +155,16 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     cap_info = next((c for c in ext_caps if c.name == args.capability), None)
 
     # Start BYOC stream (uses retry logic for transient errors)
-    params = {}  # Add any workflow-specific params here
-    stream_job = StartBYOCStreamWithRetry(
-        info,
-        args.capability,
-        params,
-        signer_base_url=args.signer,
+    req = BYOCStreamRequest(
+        capability=args.capability,
+        params={},
         enable_video_ingress=True,
         enable_video_egress=True,
+    )
+    stream_job = StartBYOCStreamWithRetry(
+        info,
+        req,
+        signer_base_url=args.signer,
         max_retries=2,
     )
 

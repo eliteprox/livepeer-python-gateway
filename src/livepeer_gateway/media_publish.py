@@ -167,7 +167,7 @@ class MediaPublish:
 
                 if isinstance(item, av.VideoFrame):
                     if self._container is None:
-                        self._open_container(item)
+                        self._open_container(video_frame=item)
                     self._encode_video_frame(item)
                     # Flush any audio frames that arrived before the container was opened
                     if self._audio_buffer:
@@ -177,10 +177,16 @@ class MediaPublish:
 
                 elif isinstance(item, av.AudioFrame):
                     if self._container is None:
-                        # Buffer audio until the first video frame opens the container
-                        self._audio_buffer.append(item)
-                    else:
-                        self._encode_audio_frame(item)
+                        if self._fps_hint is None:
+                            # No video expected -- open audio-only container
+                            logging.info("MediaPublish: opening audio-only container (sample_rate=%s)", self._audio_sample_rate)
+                            self._open_container(video_frame=None)
+                            logging.info("MediaPublish: audio-only container opened, audio_stream=%s", self._audio_stream is not None)
+                        else:
+                            # Buffer audio until the first video frame opens the container
+                            self._audio_buffer.append(item)
+                            continue
+                    self._encode_audio_frame(item)
 
             self._flush_encoder()
         except Exception as e:
@@ -197,15 +203,24 @@ class MediaPublish:
             self._audio_stream = None
             self._audio_resampler = None
 
-    def _open_container(self, first_frame: av.VideoFrame) -> None:
+    def _open_container(self, video_frame: Optional[av.VideoFrame] = None) -> None:
         if self._loop is None:
             raise RuntimeError("MediaPublish loop is not set")
 
+        prev_write_file = [None]  # mutable ref for closure
+
         def custom_io_open(url: str, flags: int, options: dict) -> object:
+            # Close the previous segment's write pipe so the reader gets EOF
+            if prev_write_file[0] is not None:
+                try:
+                    prev_write_file[0].close()
+                except Exception:
+                    pass
             read_fd, write_fd = os.pipe()
             read_file = os.fdopen(read_fd, "rb", buffering=0)
             write_file = os.fdopen(write_fd, "wb", buffering=0)
             self._schedule_pipe_reader(read_file)
+            prev_write_file[0] = write_file
             return write_file
 
         segment_options = {
@@ -221,21 +236,23 @@ class MediaPublish:
             options=segment_options,
         )
 
-        video_opts = {
-            "bf": "0",
-            "preset": "superfast",
-            "tune": "zerolatency",
-            "forced-idr": "1",
-        }
-        video_kwargs = {
-            "time_base": _OUT_TIME_BASE,
-            "width": first_frame.width,
-            "height": first_frame.height,
-            "pix_fmt": "yuv420p",
-        }
+        # Add video stream if a video frame is provided
+        if video_frame is not None:
+            video_opts = {
+                "bf": "0",
+                "preset": "superfast",
+                "tune": "zerolatency",
+                "forced-idr": "1",
+            }
+            video_kwargs = {
+                "time_base": _OUT_TIME_BASE,
+                "width": video_frame.width,
+                "height": video_frame.height,
+                "pix_fmt": "yuv420p",
+            }
 
-        rounded_fps = _normalize_fps(self._fps_hint, time_base=first_frame.time_base)
-        self._video_stream = self._container.add_stream("libx264", rate=rounded_fps, options=video_opts, **video_kwargs)
+            rounded_fps = _normalize_fps(self._fps_hint, time_base=video_frame.time_base)
+            self._video_stream = self._container.add_stream("libx264", rate=rounded_fps, options=video_opts, **video_kwargs)
 
         # Add audio stream if configured
         if self._audio_sample_rate is not None:
@@ -349,13 +366,18 @@ class MediaPublish:
         self._loop.call_soon_threadsafe(_start)
 
     async def _stream_pipe_to_trickle(self, read_file: object) -> None:
+        total_bytes = 0
         try:
             async with await self._publisher.next() as segment:
+                seq = segment.seq()
+                logging.debug("MediaPublish segment %d: started", seq)
                 while True:
                     chunk = await asyncio.to_thread(read_file.read, _READ_CHUNK)
                     if not chunk:
                         break
                     await segment.write(chunk)
+                    total_bytes += len(chunk)
+                logging.info("MediaPublish segment %d: published %d bytes", seq, total_bytes)
         except Exception:
             logging.error("MediaPublish pipe stream failed", exc_info=True)
         finally:

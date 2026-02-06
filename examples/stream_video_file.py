@@ -1,17 +1,20 @@
 """
-Stream a video file through a BYOC capability (e.g. comfystream) and optionally
-record the processed output to a local file.
+Stream a media file (video, video+audio, or audio-only) through a BYOC capability
+(e.g. comfystream) and optionally record the processed output to a local file.
 
 This example shows how to:
-1. Open a local video file and decode frames
+1. Open a local media file and decode frames (video, audio, or both)
 2. Start a streaming BYOC job (e.g. comfystream)
-3. Publish decoded frames at the source frame rate
-4. Subscribe to the processed output and record to an MP4 file
+3. Publish decoded frames at the source rate
+4. Subscribe to the processed output and record to a file
 5. Handle job token refresh and graceful shutdown
 
 Usage:
     # Basic: stream a video file through comfystream (no recording)
     python stream_video_file.py localhost:8935 --capability comfystream --input video.mp4
+
+    # Stream an audio-only file
+    python stream_video_file.py localhost:8935 --capability comfystream --input audio_only.mp4
 
     # With a ComfyUI API-format workflow file
     python stream_video_file.py localhost:8935 --capability comfystream --input video.mp4 \\
@@ -20,7 +23,7 @@ Usage:
     # Record the processed output to a file
     python stream_video_file.py localhost:8935 --capability comfystream --input video.mp4 --record output.mp4
 
-    # Loop the video continuously until Ctrl+C
+    # Loop the media continuously until Ctrl+C
     python stream_video_file.py localhost:8935 --capability comfystream --input video.mp4 --loop
 
     # With payments via remote signer and workflow
@@ -66,7 +69,7 @@ _TIME_BASE = 90_000
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Stream a video file through a BYOC capability and optionally record output."
+        description="Stream a media file (video, audio, or both) through a BYOC capability and optionally record output."
     )
     p.add_argument(
         "orchestrator",
@@ -88,7 +91,7 @@ def _parse_args() -> argparse.Namespace:
         "--input",
         required=True,
         dest="input_file",
-        help="Path to the input video file.",
+        help="Path to the input media file (video, audio, or both).",
     )
     p.add_argument(
         "--workflow",
@@ -137,9 +140,10 @@ def _parse_args() -> argparse.Namespace:
 
 @dataclass
 class _MediaInfo:
-    fps: float
-    width: int
-    height: int
+    has_video: bool
+    fps: Optional[float]
+    width: Optional[int]
+    height: Optional[int]
     has_audio: bool
     audio_sample_rate: Optional[int]
     audio_layout: Optional[str]
@@ -148,10 +152,16 @@ class _MediaInfo:
 def _probe_media(path: str) -> _MediaInfo:
     """Open the media file briefly to read video FPS/resolution and audio info."""
     container = av.open(path)
-    stream = container.streams.video[0]
-    fps = float(stream.average_rate or stream.guessed_rate or 30)
-    width = stream.codec_context.width
-    height = stream.codec_context.height
+
+    has_video = bool(container.streams.video)
+    fps: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    if has_video:
+        stream = container.streams.video[0]
+        fps = float(stream.average_rate or stream.guessed_rate or 30)
+        width = stream.codec_context.width
+        height = stream.codec_context.height
 
     has_audio = bool(container.streams.audio)
     audio_sample_rate: Optional[int] = None
@@ -161,8 +171,13 @@ def _probe_media(path: str) -> _MediaInfo:
         audio_sample_rate = audio_stream.codec_context.sample_rate
         audio_layout = audio_stream.layout.name if audio_stream.layout else "stereo"
 
+    if not has_video and not has_audio:
+        container.close()
+        raise LivepeerGatewayError(f"No video or audio streams found in {path}")
+
     container.close()
     return _MediaInfo(
+        has_video=has_video,
         fps=fps,
         width=width,
         height=height,
@@ -176,7 +191,9 @@ def _iter_media_frames(path: str, loop: bool = False, include_audio: bool = Fals
     """Yield decoded video and audio frames from a file. Optionally loop forever."""
     while True:
         container = av.open(path)
-        streams = [container.streams.video[0]]
+        streams = []
+        if container.streams.video:
+            streams.append(container.streams.video[0])
         if include_audio and container.streams.audio:
             streams.append(container.streams.audio[0])
 
@@ -192,14 +209,12 @@ def _iter_media_frames(path: str, loop: bool = False, include_audio: bool = Fals
 async def _record_output(
     subscribe_url: str,
     output_path: str,
-    fps: float,
-    width: int,
-    height: int,
     stop_event: asyncio.Event,
+    fps: Optional[float] = None,
     audio_sample_rate: Optional[int] = None,
     audio_layout: Optional[str] = None,
 ) -> None:
-    """Subscribe to the processed output stream and record frames to a video file."""
+    """Subscribe to the processed output stream and record frames to a file."""
     media_out = MediaOutput(subscribe_url)
     output_container = None
     video_stream = None
@@ -221,7 +236,7 @@ async def _record_output(
                 # the actual output resolution (which may differ from the input).
                 if output_container is None:
                     output_container = av.open(output_path, mode="w")
-                    video_stream = output_container.add_stream("libx264", rate=int(fps))
+                    video_stream = output_container.add_stream("libx264", rate=int(fps or 30))
                     video_stream.width = frame.width
                     video_stream.height = frame.height
                     video_stream.pix_fmt = "yuv420p"
@@ -235,12 +250,12 @@ async def _record_output(
                         )
 
                     audio_tag = "+audio" if audio_stream else ""
-                    print(f"Recording to {output_path} ({frame.width}x{frame.height} @ {int(fps)} fps{audio_tag})")
+                    print(f"Recording to {output_path} ({frame.width}x{frame.height} @ {int(fps or 30)} fps{audio_tag})")
 
                 # Re-encode the video frame into the output container
                 frame_for_encode = frame.reformat(format="yuv420p")
                 frame_for_encode.pts = video_frame_count
-                frame_for_encode.time_base = Fraction(1, int(fps))
+                frame_for_encode.time_base = Fraction(1, int(fps or 30))
                 for packet in video_stream.encode(frame_for_encode):
                     output_container.mux(packet)
 
@@ -252,24 +267,35 @@ async def _record_output(
                     msg += " output frames"
                     print(msg)
 
-            elif decoded.kind == "audio" and audio_stream is not None:
-                # Lazy-init audio resampler for format conversion
-                if audio_resampler is None:
-                    codec_ctx = audio_stream.codec_context
-                    audio_resampler = av.AudioResampler(
-                        format=codec_ctx.format,
-                        layout=codec_ctx.layout,
-                        rate=codec_ctx.sample_rate,
+            elif decoded.kind == "audio":
+                # Lazy-init audio-only output container if no video has arrived
+                if output_container is None and audio_sample_rate is not None:
+                    output_container = av.open(output_path, mode="w")
+                    audio_stream = output_container.add_stream(
+                        "aac",
+                        rate=audio_sample_rate,
+                        layout=audio_layout or "stereo",
                     )
+                    print(f"Recording audio-only to {output_path} ({audio_sample_rate} Hz, {audio_layout or 'stereo'})")
 
-                resampled = audio_resampler.resample(frame)
-                for rf in resampled:
-                    rf.pts = audio_samples_written
-                    audio_samples_written += rf.samples
-                    for packet in audio_stream.encode(rf):
-                        output_container.mux(packet)
+                if audio_stream is not None:
+                    # Lazy-init audio resampler for format conversion
+                    if audio_resampler is None:
+                        codec_ctx = audio_stream.codec_context
+                        audio_resampler = av.AudioResampler(
+                            format=codec_ctx.format,
+                            layout=codec_ctx.layout,
+                            rate=codec_ctx.sample_rate,
+                        )
 
-                audio_frame_count += 1
+                    resampled = audio_resampler.resample(frame)
+                    for rf in resampled:
+                        rf.pts = audio_samples_written
+                        audio_samples_written += rf.samples
+                        for packet in audio_stream.encode(rf):
+                            output_container.mux(packet)
+
+                    audio_frame_count += 1
 
     except LivepeerGatewayError as e:
         logging.warning("Output subscribe error: %s", e)
@@ -293,10 +319,12 @@ async def _record_output(
                     output_container.mux(packet)
             output_container.close()
 
-        msg = f"Recording finished: {video_frame_count} video"
+        parts = []
+        if video_frame_count > 0:
+            parts.append(f"{video_frame_count} video")
         if audio_frame_count > 0:
-            msg += f" + {audio_frame_count} audio"
-        msg += f" frames written to {output_path}"
+            parts.append(f"{audio_frame_count} audio")
+        msg = f"Recording finished: {' + '.join(parts) or '0'} frames written to {output_path}"
         print(msg)
 
 
@@ -344,10 +372,13 @@ async def run(args: argparse.Namespace) -> None:
 
     # Probe the media file to get native FPS, resolution, and audio info
     media_info = _probe_media(args.input_file)
-    fps = args.fps if args.fps else media_info.fps
+    fps: Optional[float] = args.fps if args.fps else media_info.fps
     width, height = media_info.width, media_info.height
-    frame_interval = 1.0 / max(1e-6, fps)
-    print(f"Video: {width}x{height} @ {fps:.2f} fps (native {media_info.fps:.2f})")
+    frame_interval = 1.0 / max(1e-6, fps) if fps else 0.0
+    if media_info.has_video:
+        print(f"Video: {width}x{height} @ {fps:.2f} fps (native {media_info.fps:.2f})")
+    else:
+        print("Video: none (audio-only)")
     if media_info.has_audio:
         print(f"Audio: {media_info.audio_sample_rate} Hz, layout={media_info.audio_layout}")
     else:
@@ -379,8 +410,10 @@ async def run(args: argparse.Namespace) -> None:
         print(f"Workflow    : {args.workflow} ({len(workflow)} nodes)")
 
     # Set width/height from video probe (can be overridden by --params)
-    stream_params["width"] = width
-    stream_params["height"] = height
+    if width is not None:
+        stream_params["width"] = width
+    if height is not None:
+        stream_params["height"] = height
 
     # Merge any additional params from --params
     if args.params:
@@ -455,7 +488,7 @@ async def run(args: argparse.Namespace) -> None:
 
     try:
         if not stream_job.publish_url:
-            raise LivepeerGatewayError("No publish_url returned - video ingress not enabled")
+            raise LivepeerGatewayError("No publish_url returned - media ingress not enabled")
 
         publish_config = MediaPublishConfig(
             fps=fps,
@@ -470,10 +503,8 @@ async def run(args: argparse.Namespace) -> None:
                 _record_output(
                     stream_job.subscribe_url,
                     args.record,
-                    fps,
-                    width,
-                    height,
                     stop_event,
+                    fps=fps,
                     audio_sample_rate=media_info.audio_sample_rate,
                     audio_layout=media_info.audio_layout,
                 )
@@ -491,10 +522,17 @@ async def run(args: argparse.Namespace) -> None:
         pts = 0
         video_frame_count = 0
         audio_frame_count = 0
-        last_wall = time.monotonic()
+        audio_samples_sent = 0
+        audio_start_wall = time.monotonic()
+        last_wall = audio_start_wall
 
-        audio_tag = "+audio" if media_info.has_audio else ""
-        print(f"Publishing frames{audio_tag} {'(looping)' if args.loop else ''}...")
+        mode_parts = []
+        if media_info.has_video:
+            mode_parts.append("video")
+        if media_info.has_audio:
+            mode_parts.append("audio")
+        mode_str = "+".join(mode_parts)
+        print(f"Publishing {mode_str} frames {'(looping)' if args.loop else ''}...")
         for frame in _iter_media_frames(
             args.input_file,
             loop=args.loop,
@@ -526,16 +564,28 @@ async def run(args: argparse.Namespace) -> None:
                 await asyncio.sleep(frame_interval)
 
             elif isinstance(frame, av.AudioFrame):
-                # Audio frames are published as decoded (no pacing needed —
-                # they naturally interleave between paced video frames).
                 await media.write_audio_frame(frame)
                 audio_frame_count += 1
 
-        msg = f"Published {video_frame_count} video"
+                # For audio-only, pace to real-time using cumulative sample count
+                if not media_info.has_video:
+                    sr = frame.sample_rate or media_info.audio_sample_rate or 48000
+                    audio_samples_sent += frame.samples
+                    target_wall = audio_start_wall + (audio_samples_sent / sr)
+                    sleep_dur = target_wall - time.monotonic()
+                    if sleep_dur > 0:
+                        await asyncio.sleep(sleep_dur)
+
+                if not media_info.has_video and audio_frame_count % 500 == 0:
+                    elapsed = time.monotonic() - audio_start_wall
+                    print(f"  published {audio_frame_count} audio frames ({elapsed:.1f}s elapsed)")
+
+        parts = []
+        if video_frame_count > 0:
+            parts.append(f"{video_frame_count} video")
         if audio_frame_count > 0:
-            msg += f" + {audio_frame_count} audio"
-        msg += " frames total"
-        print(msg)
+            parts.append(f"{audio_frame_count} audio")
+        print(f"Published {' + '.join(parts) or '0'} frames total")
 
     finally:
         # Cancel recording task
