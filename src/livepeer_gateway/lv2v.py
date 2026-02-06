@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
@@ -13,6 +14,9 @@ from .media_output import MediaOutput
 from .media_publish import MediaPublish, MediaPublishConfig
 from .orchestrator import SelectOrchestrator, _http_origin, post_json
 from .payments import PaymentSession
+from .trickle_subscriber import TrickleSubscriber
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,7 @@ class LiveVideoToVideo:
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
     _payment_session: Optional["PaymentSession"] = field(default=None, repr=False, compare=False)
+    _payment_task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def from_json(
@@ -127,11 +132,46 @@ class LiveVideoToVideo:
         """
         return self._payment_session
 
+    def start_payment_sender(self) -> Optional[asyncio.Task]:
+        """
+        Start the background payment sender if a payment session and
+        subscribe_url are available and the task isn't already running.
+
+        Requires a running asyncio event loop.  If called from sync code
+        (no running loop), logs a warning and returns ``None``.  The
+        method is idempotent -- safe to call multiple times.
+
+        Returns the ``asyncio.Task``, or ``None`` if payments could not
+        be started.
+        """
+        if getattr(self, "_payment_task", None) is not None:
+            return self._payment_task
+        if not self._payment_session or not self.subscribe_url:
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _LOG.warning(
+                "No running event loop; per-segment payments not started. "
+                "Call job.start_payment_sender() from async code to enable."
+            )
+            return None
+        task = loop.create_task(
+            _payment_sender(self.subscribe_url, self._payment_session)
+        )
+        object.__setattr__(self, "_payment_task", task)
+        return task
+
     async def close(self) -> None:
         """
-        Close any nested helpers (control, media, etc) best-effort.
+        Close any nested helpers (control, media, payment sender, etc)
+        best-effort.
         """
         tasks = []
+        payment_task = getattr(self, "_payment_task", None)
+        if payment_task is not None and not payment_task.done():
+            payment_task.cancel()
+            tasks.append(payment_task)
         if self.control is not None:
             tasks.append(self.control.close_control())
         if self._media is not None:
@@ -141,8 +181,45 @@ class LiveVideoToVideo:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
-            if isinstance(result, BaseException):
+            if isinstance(result, BaseException) and not isinstance(
+                result, asyncio.CancelledError
+            ):
                 raise result
+
+
+async def _payment_sender(
+    subscribe_url: str,
+    session: PaymentSession,
+) -> None:
+    """
+    Send one payment per trickle output segment.
+
+    Uses a long-lived :class:`TrickleSubscriber` with
+    ``connection_close=True``.  Reads only headers (zero body bytes) per
+    segment, sends the payment, then closes the segment.  The built-in
+    preconnect prefetches the next segment while the payment is in
+    flight.
+
+    Runs until the trickle stream ends or the task is cancelled.
+    Payment errors are logged but do not stop the loop.
+    """
+    async with TrickleSubscriber(
+        subscribe_url,
+        connection_close=True,
+    ) as subscriber:
+        while True:
+            segment = await subscriber.next()
+            if segment is None:
+                _LOG.debug("Payment sender: stream ended for %s", subscribe_url)
+                return
+            seq = segment.seq()
+            try:
+                _LOG.debug("Payment sender: sending payment for seq=%s", seq)
+                await asyncio.to_thread(session.send_payment)
+            except Exception:
+                _LOG.exception("Payment sender: failed for seq=%s", seq)
+            finally:
+                await segment.close()
 
 
 def start_lv2v(
@@ -157,6 +234,11 @@ def start_lv2v(
 
     Selects an orchestrator with LV2V capability and calls
     POST {info.transcoder}/live-video-to-video with JSON body.
+
+    If called from within a running asyncio event loop, a background
+    task is automatically started to send per-segment payments.
+    Otherwise a warning is logged and payments can be started later
+    via ``job.start_payment_sender()``.
     """
     if not req.model_id:
         raise LivepeerGatewayError("start_lv2v requires model_id")
@@ -172,6 +254,7 @@ def start_lv2v(
     session = PaymentSession(
         signer_url,
         info,
+        type="lv2v",
         capabilities=capabilities,
     )
     p = session.get_payment()
@@ -183,8 +266,13 @@ def start_lv2v(
     base = _http_origin(info.transcoder)
     url = f"{base}/live-video-to-video"
     data = post_json(url, req.to_json(), headers=headers)
-    return LiveVideoToVideo.from_json(
+    job = LiveVideoToVideo.from_json(
         data,
         orchestrator_info=info,
         payment_session=session,
     )
+    if not job.manifest_id:
+        raise LivepeerGatewayError("LiveVideoToVideo response missing manifest_id")
+    session.set_manifest_id(job.manifest_id)
+    job.start_payment_sender()
+    return job

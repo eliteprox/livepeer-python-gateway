@@ -144,14 +144,22 @@ class PaymentSession:
         signer_url: Optional[str],
         info: lp_rpc_pb2.OrchestratorInfo,
         *,
+        type: str,
         capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
         max_refresh_retries: int = 3,
     ) -> None:
         self._signer_url = signer_url
         self._info = info
+        self._type = type
+        self._manifest_id: Optional[str] = None
         self._capabilities = capabilities
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: Optional[dict[str, str]] = None
+
+    def set_manifest_id(self, manifest_id: str) -> None:
+        if not isinstance(manifest_id, str) or not manifest_id.strip():
+            raise PaymentError("manifest_id must be a non-empty string")
+        self._manifest_id = manifest_id.strip()
 
     def get_payment(self) -> GetPaymentResponse:
         """
@@ -182,12 +190,16 @@ class PaymentSession:
 
             pb = self._info.SerializeToString()
             orch_b64 = base64.b64encode(pb).decode("ascii")
-            payload: dict[str, Any] = {"orchestrator": orch_b64, "type": "lv2v"}
+            payload: dict[str, Any] = {
+                "orchestrator": orch_b64,
+                "type": self._type,
+            }
+            if self._manifest_id is not None:
+                payload["ManifestID"] = self._manifest_id
             if self._state is not None:
                 payload["state"] = self._state
 
             data = post_json(url, payload)
-
             payment = data.get("payment")
             if not isinstance(payment, str) or not payment:
                 raise PaymentError(
