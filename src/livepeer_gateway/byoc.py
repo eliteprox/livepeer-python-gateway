@@ -11,7 +11,7 @@ import json
 import logging
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -132,6 +132,8 @@ class BYOCStreamJob:
             fps=config.fps,
             mime_type=config.mime_type,
             keyframe_interval_s=config.keyframe_interval_s,
+            audio_sample_rate=config.audio_sample_rate,
+            audio_layout=config.audio_layout,
         )
 
     def media_output(
@@ -164,6 +166,38 @@ class BYOCStreamJob:
             max_frames=max_frames,
             write_pts=write_pts,
         )
+
+
+@dataclass
+class BYOCStreamRequest:
+    """Request configuration for a BYOC streaming job.
+
+    The params dict is sent as the request body to the orchestrator and
+    forwarded to the BYOC worker's stream start handler.
+
+    For comfystream, the params should contain:
+        - "prompts": ComfyUI API-format workflow dict (flat dict keyed by string
+          node IDs, each with "inputs", "class_type", and "_meta")
+        - "width": Video width in pixels (optional)
+        - "height": Video height in pixels (optional)
+
+    Example:
+        req = BYOCStreamRequest(
+            capability="comfystream",
+            params={
+                "prompts": json.load(open("workflow-api.json")),
+                "width": 512,
+                "height": 512,
+            },
+        )
+    """
+
+    capability: str
+    params: dict[str, Any] = field(default_factory=dict)
+    enable_video_ingress: bool = True
+    enable_video_egress: bool = True
+    enable_data_output: bool = False
+    timeout_seconds: int = 30
 
 
 def GetBYOCJobToken(
@@ -458,117 +492,27 @@ def StartBYOCJob(
 
 def StartBYOCStream(
     info: lp_rpc_pb2.OrchestratorInfo,
-    capability: str,
-    params: dict[str, Any],
+    req: BYOCStreamRequest,
     signer_base_url: Optional[str] = None,
     payment_state: Optional[PaymentState] = None,
-    enable_video_ingress: bool = True,
-    enable_video_egress: bool = True,
-    enable_data_output: bool = False,
-    timeout_seconds: int = 30,
 ) -> BYOCStreamJob:
     """Start a streaming BYOC job on the orchestrator.
 
     Args:
         info: OrchestratorInfo from GetOrchestratorInfo.
-        capability: Name of the BYOC capability (e.g., "comfystream").
-        params: Parameters to pass to the BYOC worker.
+        req: BYOC stream request configuration.
         signer_base_url: Base URL of remote signer (for paid jobs).
         payment_state: Previous payment state for nonce continuity.
-        enable_video_ingress: Enable video input publishing.
-        enable_video_egress: Enable video output subscribing.
-        enable_data_output: Enable data output channel.
-        timeout_seconds: Timeout for the stream start request.
 
     Returns:
         BYOCStreamJob with trickle URLs and helper methods.
     """
-    import uuid
-
-    base_url = _normalize_https_base_url(info.transcoder)
-    url = f"{base_url}/ai/stream/start"
-
-    stream_id = str(uuid.uuid4())
-
-    # Build job parameters
-    job_parameters = {
-        "enable_video_ingress": enable_video_ingress,
-        "enable_video_egress": enable_video_egress,
-        "enable_data_output": enable_data_output,
-    }
-
-    # Build and sign job request (signer_base_url is required for BYOC)
-    _, job_request_b64 = _build_job_request(
-        capability=capability,
-        request_dict=params,
-        timeout_seconds=timeout_seconds,
-        parameters=job_parameters,
-        stream_id=stream_id,
+    return _start_byoc_stream_internal(
+        info=info,
+        req=req,
         signer_base_url=signer_base_url,
+        payment_state=payment_state,
     )
-
-    headers = {
-        HEADER_JOB_REQUEST: job_request_b64,
-        HEADER_CAPABILITY: capability,
-        "Content-Type": "application/json",
-    }
-
-    # Get payment if signer is provided
-    if signer_base_url:
-        payment_resp = GetBYOCPayment(
-            signer_base_url,
-            info,
-            capability,
-            state=payment_state,
-            manifest_id=capability,
-        )
-        headers[HEADER_PAYMENT] = payment_resp.payment
-
-    # Make request
-    body = json.dumps(params).encode()
-    request = Request(url, data=body, headers=headers, method="POST")
-    ssl_ctx = ssl._create_unverified_context()
-
-    try:
-        with urlopen(request, timeout=BYOC_REQUEST_TIMEOUT, context=ssl_ctx) as resp:
-            response_data = resp.read()
-
-            # Extract trickle URLs from response headers
-            publish_url = resp.headers.get(HEADER_PUBLISH_URL)
-            subscribe_url = resp.headers.get(HEADER_SUBSCRIBE_URL)
-            control_url = resp.headers.get(HEADER_CONTROL_URL)
-            events_url = resp.headers.get(HEADER_EVENTS_URL)
-            data_url = resp.headers.get(HEADER_DATA_URL)
-            balance_str = resp.headers.get(HEADER_PAYMENT_BALANCE)
-            balance = int(balance_str) if balance_str else None
-
-            try:
-                raw = json.loads(response_data)
-            except json.JSONDecodeError:
-                raw = {"raw_response": response_data.decode("utf-8", errors="replace")}
-
-            return BYOCStreamJob(
-                raw=raw,
-                stream_id=stream_id,
-                capability=capability,
-                orchestrator_url=base_url,
-                publish_url=publish_url,
-                subscribe_url=subscribe_url,
-                control_url=control_url,
-                events_url=events_url,
-                data_url=data_url,
-                balance=balance,
-                signed_job_request=job_request_b64,
-            )
-
-    except HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        logging.error(
-            "BYOC stream start failed: HTTP %d - %s",
-            e.code,
-            error_body,
-        )
-        raise
 
 
 def SendBYOCPayment(
@@ -657,14 +601,9 @@ def SendBYOCPayment(
 
 def StartBYOCStreamWithRetry(
     info: lp_rpc_pb2.OrchestratorInfo,
-    capability: str,
-    params: dict[str, Any],
+    req: BYOCStreamRequest,
     signer_base_url: str,
     payment_state: Optional[PaymentState] = None,
-    enable_video_ingress: bool = True,
-    enable_video_egress: bool = True,
-    enable_data_output: bool = False,
-    timeout_seconds: int = 30,
     max_retries: int = 2,
 ) -> BYOCStreamJob:
     """Start a streaming BYOC job with retry on transient errors.
@@ -680,14 +619,9 @@ def StartBYOCStreamWithRetry(
 
     Args:
         info: OrchestratorInfo from GetOrchestratorInfo.
-        capability: Name of the BYOC capability (e.g., "comfystream").
-        params: Parameters to pass to the BYOC worker.
+        req: BYOC stream request configuration.
         signer_base_url: Base URL of remote signer (required).
         payment_state: Previous payment state for nonce continuity.
-        enable_video_ingress: Enable video input publishing.
-        enable_video_egress: Enable video output subscribing.
-        enable_data_output: Enable data output channel.
-        timeout_seconds: Timeout for the stream start request.
         max_retries: Maximum number of retry attempts for transient errors.
 
     Returns:
@@ -706,14 +640,9 @@ def StartBYOCStreamWithRetry(
         try:
             return _start_byoc_stream_internal(
                 info=info,
-                capability=capability,
-                params=params,
+                req=req,
                 signer_base_url=signer_base_url,
                 payment_state=payment_state,
-                enable_video_ingress=enable_video_ingress,
-                enable_video_egress=enable_video_egress,
-                enable_data_output=enable_data_output,
-                timeout_seconds=timeout_seconds,
                 stream_id=stream_id,
             )
         except HTTPError as e:
@@ -751,14 +680,9 @@ def StartBYOCStreamWithRetry(
 
 def _start_byoc_stream_internal(
     info: lp_rpc_pb2.OrchestratorInfo,
-    capability: str,
-    params: dict[str, Any],
+    req: BYOCStreamRequest,
     signer_base_url: Optional[str] = None,
     payment_state: Optional[PaymentState] = None,
-    enable_video_ingress: bool = True,
-    enable_video_egress: bool = True,
-    enable_data_output: bool = False,
-    timeout_seconds: int = 30,
     stream_id: Optional[str] = None,
 ) -> BYOCStreamJob:
     """Internal helper to start a BYOC stream with a specific stream_id."""
@@ -770,18 +694,18 @@ def _start_byoc_stream_internal(
     if stream_id is None:
         stream_id = str(uuid.uuid4())
 
-    # Build job parameters
+    # Build job parameters (orchestrator-level flags, separate from worker params)
     job_parameters = {
-        "enable_video_ingress": enable_video_ingress,
-        "enable_video_egress": enable_video_egress,
-        "enable_data_output": enable_data_output,
+        "enable_video_ingress": req.enable_video_ingress,
+        "enable_video_egress": req.enable_video_egress,
+        "enable_data_output": req.enable_data_output,
     }
 
     # Build and sign job request (signer_base_url is required for BYOC)
     _, job_request_b64 = _build_job_request(
-        capability=capability,
-        request_dict=params,
-        timeout_seconds=timeout_seconds,
+        capability=req.capability,
+        request_dict=req.params,
+        timeout_seconds=req.timeout_seconds,
         parameters=job_parameters,
         stream_id=stream_id,
         signer_base_url=signer_base_url,
@@ -789,29 +713,33 @@ def _start_byoc_stream_internal(
 
     headers = {
         HEADER_JOB_REQUEST: job_request_b64,
-        HEADER_CAPABILITY: capability,
+        HEADER_CAPABILITY: req.capability,
         "Content-Type": "application/json",
     }
 
     # Get payment if signer is provided and price is non-zero
     if signer_base_url:
         # Fetch job token to get accurate pricing for this sender/capability
-        job_token = GetBYOCJobToken(info, capability, signer_base_url)
+        job_token = GetBYOCJobToken(info, req.capability, signer_base_url)
         if job_token.price_per_unit > 0 and job_token.pixels_per_unit > 0:
             payment_resp = GetBYOCPayment(
                 signer_base_url,
                 info,
-                capability,
+                req.capability,
                 job_token=job_token,
                 state=payment_state,
-                manifest_id=capability,
+                manifest_id=req.capability,
             )
             headers[HEADER_PAYMENT] = payment_resp.payment
         else:
-            logging.debug("Capability %s has zero price, skipping payment", capability)
+            logging.debug("Capability %s has zero price, skipping payment", req.capability)
 
-    # Make request
-    body = json.dumps(params).encode()
+    # Make request - params are wrapped under a "params" key in the body.
+    # go-livepeer merges the body fields into reqBodyForRunner (which adds
+    # gateway_request_id, trickle URLs, etc.) and forwards it to the worker.
+    # pytrickle's StreamStartRequest Pydantic model expects the workflow
+    # params to be nested under the "params" key.
+    body = json.dumps({"params": req.params}).encode()
     request = Request(url, data=body, headers=headers, method="POST")
     ssl_ctx = ssl._create_unverified_context()
 
@@ -835,7 +763,7 @@ def _start_byoc_stream_internal(
         return BYOCStreamJob(
             raw=raw,
             stream_id=stream_id,
-            capability=capability,
+            capability=req.capability,
             orchestrator_url=base_url,
             publish_url=publish_url,
             subscribe_url=subscribe_url,

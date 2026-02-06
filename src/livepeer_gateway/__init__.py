@@ -5,6 +5,7 @@ from .byoc import (
     BYOCPaymentConfig,
     BYOCPaymentSender,
     BYOCStreamJob,
+    BYOCStreamRequest,
     BYOCTokenRefreshConfig,
     BYOCTokenRefresher,
     GetBYOCJobToken,
@@ -36,6 +37,7 @@ __all__ = [
     "BYOCPaymentConfig",  # Backwards compat alias for BYOCTokenRefreshConfig
     "BYOCPaymentSender",  # Backwards compat alias for BYOCTokenRefresher
     "BYOCStreamJob",
+    "BYOCStreamRequest",
     "BYOCTokenRefreshConfig",
     "BYOCTokenRefresher",
     "Control",

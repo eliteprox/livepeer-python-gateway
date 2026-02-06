@@ -23,6 +23,7 @@ import sys
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 from livepeer_gateway import (
+    BYOCStreamRequest,
     BYOCTokenRefreshConfig,
     BYOCTokenRefresher,
     GetOrchestratorInfo,
@@ -129,18 +130,22 @@ async def run_stream(args: argparse.Namespace) -> None:
     print()
 
     # Stream parameters (customize based on your BYOC worker)
-    params = {
-        "workflow": "default",  # Example parameter
-    }
-
-    stream_job = StartBYOCStream(
-        info,
-        args.capability,
-        params,
-        signer_base_url=args.signer,
+    # For comfystream, params should contain:
+    #   "prompts": <ComfyUI API-format workflow dict>
+    #   "width": <video width>
+    #   "height": <video height>
+    stream_req = BYOCStreamRequest(
+        capability=args.capability,
+        params={},
         enable_video_ingress=enable_video_ingress,
         enable_video_egress=enable_video_egress,
         enable_data_output=args.enable_data_output,
+    )
+
+    stream_job = StartBYOCStream(
+        info,
+        stream_req,
+        signer_base_url=args.signer,
     )
 
     print(f"Stream started: stream_id={stream_job.stream_id}")

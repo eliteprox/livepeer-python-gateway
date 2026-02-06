@@ -56,6 +56,8 @@ class MediaPublishConfig:
     fps: Optional[float] = None
     mime_type: str = "video/mp2t"
     keyframe_interval_s: float = 2.0
+    audio_sample_rate: Optional[int] = None
+    audio_layout: str = "stereo"
 
 
 class MediaPublish:
@@ -66,6 +68,8 @@ class MediaPublish:
         mime_type: str = "video/mp2t",
         keyframe_interval_s: float = 2.0,
         fps: Optional[float] = None,
+        audio_sample_rate: Optional[int] = None,
+        audio_layout: str = "stereo",
     ) -> None:
         self.publish_url = publish_url
         self._publisher = TricklePublisher(publish_url, mime_type)
@@ -81,18 +85,42 @@ class MediaPublish:
         self._closed = False
         self._error: Optional[BaseException] = None
 
-        # Encoder state (owned by the encoder thread).
+        # Video encoder state (owned by the encoder thread).
         self._container: Optional[av.container.OutputContainer] = None
         self._video_stream: Optional[av.video.stream.VideoStream] = None
         self._wallclock_start: Optional[float] = None
         self._last_keyframe_time: Optional[float] = None
         self._last_out_pts: Optional[int] = None
 
+        # Audio encoder state (owned by the encoder thread).
+        self._audio_sample_rate: Optional[int] = audio_sample_rate
+        self._audio_layout: str = audio_layout
+        self._audio_stream: Optional[av.audio.stream.AudioStream] = None
+        self._audio_resampler: Optional[av.AudioResampler] = None
+        self._audio_samples_encoded: int = 0
+        self._audio_buffer: list[av.AudioFrame] = []
+
     async def write_frame(self, frame: av.VideoFrame) -> None:
         if self._closed:
             raise LivepeerGatewayError("MediaPublish is closed")
         if not isinstance(frame, av.VideoFrame):
             raise TypeError(f"write_frame expects av.VideoFrame, got {type(frame).__name__}")
+        if self._error:
+            raise LivepeerGatewayError(f"MediaPublish encoder failed: {self._error}") from self._error
+
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+
+        self._ensure_thread()
+        await asyncio.to_thread(self._queue.put, frame)
+
+    async def write_audio_frame(self, frame: av.AudioFrame) -> None:
+        if self._closed:
+            raise LivepeerGatewayError("MediaPublish is closed")
+        if not isinstance(frame, av.AudioFrame):
+            raise TypeError(f"write_audio_frame expects av.AudioFrame, got {type(frame).__name__}")
+        if self._audio_sample_rate is None:
+            raise LivepeerGatewayError("Audio not configured (audio_sample_rate is None)")
         if self._error:
             raise LivepeerGatewayError(f"MediaPublish encoder failed: {self._error}") from self._error
 
@@ -136,10 +164,23 @@ class MediaPublish:
                 item = self._queue.get()
                 if item is _STOP:
                     break
-                frame = item
-                if self._container is None:
-                    self._open_container(frame)
-                self._encode_frame(frame)
+
+                if isinstance(item, av.VideoFrame):
+                    if self._container is None:
+                        self._open_container(item)
+                    self._encode_video_frame(item)
+                    # Flush any audio frames that arrived before the container was opened
+                    if self._audio_buffer:
+                        for buffered in self._audio_buffer:
+                            self._encode_audio_frame(buffered)
+                        self._audio_buffer.clear()
+
+                elif isinstance(item, av.AudioFrame):
+                    if self._container is None:
+                        # Buffer audio until the first video frame opens the container
+                        self._audio_buffer.append(item)
+                    else:
+                        self._encode_audio_frame(item)
 
             self._flush_encoder()
         except Exception as e:
@@ -153,6 +194,8 @@ class MediaPublish:
                     logging.exception("MediaPublish failed to close container")
             self._container = None
             self._video_stream = None
+            self._audio_stream = None
+            self._audio_resampler = None
 
     def _open_container(self, first_frame: av.VideoFrame) -> None:
         if self._loop is None:
@@ -194,7 +237,15 @@ class MediaPublish:
         rounded_fps = _normalize_fps(self._fps_hint, time_base=first_frame.time_base)
         self._video_stream = self._container.add_stream("libx264", rate=rounded_fps, options=video_opts, **video_kwargs)
 
-    def _encode_frame(self, frame: av.VideoFrame) -> None:
+        # Add audio stream if configured
+        if self._audio_sample_rate is not None:
+            self._audio_stream = self._container.add_stream(
+                "aac",
+                rate=self._audio_sample_rate,
+                layout=self._audio_layout,
+            )
+
+    def _encode_video_frame(self, frame: av.VideoFrame) -> None:
         if self._video_stream is None or self._container is None:
             raise RuntimeError("MediaPublish encoder is not initialized")
 
@@ -226,12 +277,55 @@ class MediaPublish:
         for packet in packets:
             self._container.mux(packet)
 
-    def _flush_encoder(self) -> None:
-        if self._video_stream is None or self._container is None:
+    def _encode_audio_frame(self, frame: av.AudioFrame) -> None:
+        if self._audio_stream is None or self._container is None:
             return
-        packets = self._video_stream.encode(None)
-        for packet in packets:
-            self._container.mux(packet)
+
+        # Lazy-init resampler for format/layout conversion to match AAC encoder
+        if self._audio_resampler is None:
+            codec_ctx = self._audio_stream.codec_context
+            self._audio_resampler = av.AudioResampler(
+                format=codec_ctx.format,
+                layout=codec_ctx.layout,
+                rate=codec_ctx.sample_rate,
+            )
+
+        resampled = self._audio_resampler.resample(frame)
+        for rf in resampled:
+            # Assign monotonic PTS based on total samples encoded so far.
+            # This keeps audio PTS independent of source timestamps and
+            # handles looping correctly (PTS never decreases).
+            rf.pts = self._audio_samples_encoded
+            self._audio_samples_encoded += rf.samples
+
+            packets = self._audio_stream.encode(rf)
+            for packet in packets:
+                self._container.mux(packet)
+
+    def _flush_encoder(self) -> None:
+        if self._container is None:
+            return
+
+        # Flush video encoder
+        if self._video_stream is not None:
+            packets = self._video_stream.encode(None)
+            for packet in packets:
+                self._container.mux(packet)
+
+        # Flush audio resampler then encoder
+        if self._audio_stream is not None:
+            if self._audio_resampler is not None:
+                flushed = self._audio_resampler.resample(None)
+                for rf in flushed:
+                    rf.pts = self._audio_samples_encoded
+                    self._audio_samples_encoded += rf.samples
+                    packets = self._audio_stream.encode(rf)
+                    for packet in packets:
+                        self._container.mux(packet)
+
+            packets = self._audio_stream.encode(None)
+            for packet in packets:
+                self._container.mux(packet)
 
     def _compute_pts(self, pts: Optional[int], time_base: Optional[Fraction]) -> tuple[float, int]:
         if pts is not None and time_base is not None:
