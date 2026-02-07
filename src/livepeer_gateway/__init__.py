@@ -10,7 +10,8 @@ from .orch_info import get_orch_info
 from .orchestrator import DiscoverOrchestrators, SelectOrchestrator
 from .remote_signer import PaymentSession
 from .trickle_publisher import TricklePublisher
-from .trickle_subscriber import SegmentReader, TrickleSubscriber
+from .segment_reader import SegmentReader
+from .trickle_subscriber import TrickleSubscriber
 
 __all__ = [
     "Control",

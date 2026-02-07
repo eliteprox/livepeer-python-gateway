@@ -38,8 +38,9 @@ class Events:
         async def _read_all(segment: "SegmentReader", *, chunk_size: int = 33 * 1024) -> bytes:
             parts = []
             try:
+                reader = segment.make_reader()
                 while True:
-                    chunk = await segment.read(chunk_size=chunk_size)
+                    chunk = await reader.read(chunk_size=chunk_size)
                     if not chunk:
                         break
                     parts.append(chunk)

@@ -14,7 +14,8 @@ from .media_decode import (
     is_decoder_end,
 )
 
-from .trickle_subscriber import SegmentReader, TrickleSubscriber
+from .segment_reader import SegmentReader
+from .trickle_subscriber import TrickleSubscriber
 
 
 class MediaOutput:
@@ -137,8 +138,9 @@ class MediaOutput:
                 _require_mpegts_content_type(segment.headers().get("Content-Type"))
                 checked_content_type = True
             try:
+                reader = segment.make_reader()
                 while True:
-                    chunk = await segment.read(chunk_size=self.chunk_size)
+                    chunk = await reader.read(chunk_size=self.chunk_size)
                     if not chunk:
                         break
                     yield chunk

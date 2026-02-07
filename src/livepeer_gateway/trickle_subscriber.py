@@ -6,6 +6,8 @@ from typing import Optional
 
 import aiohttp
 
+from .segment_reader import SegmentReader
+
 
 _LOG = logging.getLogger(__name__)
 
@@ -187,51 +189,4 @@ class TrickleSubscriber:
                 finally:
                     self._session = None
 
-
-class SegmentReader:
-    def __init__(self, response: aiohttp.ClientResponse, max_bytes: Optional[int] = None):
-        self.response = response
-        self._max_bytes = max_bytes
-        self._total_bytes = 0
-
-    def seq(self) -> int:
-        """Extract the sequence number from the response headers."""
-        seq_str = self.response.headers.get("Lp-Trickle-Seq")
-        try:
-            seq = int(seq_str)
-        except (TypeError, ValueError):
-            return -1
-        return seq
-
-    def eos(self) -> bool:
-        return self.response.headers.get("Lp-Trickle-Closed") is not None
-
-    def headers(self) -> "aiohttp.typedefs.LooseHeaders":
-        return self.response.headers
-
-    async def read(self, chunk_size: int = 32 * 1024) -> Optional[bytes]:
-        """Read the next chunk of the segment."""
-        if not self.response:
-            await self.close()
-            return None
-        chunk = await self.response.content.read(chunk_size)
-        if not chunk:
-            await self.close()
-            return None
-        if self._max_bytes is not None:
-            self._total_bytes += len(chunk)
-            if self._total_bytes > self._max_bytes:
-                await self.close()
-                raise ValueError(
-                    f"Trickle segment exceeds max size ({self._total_bytes} > {self._max_bytes})"
-                )
-        return chunk
-
-    async def close(self) -> None:
-        """Ensure the response is properly closed when done."""
-        if self.response is None:
-            return
-        if not self.response.closed:
-            self.response.release()
-            self.response.close()
 
