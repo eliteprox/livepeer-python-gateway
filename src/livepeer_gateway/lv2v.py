@@ -11,7 +11,7 @@ from .capabilities import CapabilityId, build_capabilities
 from .control import Control
 from .errors import LivepeerGatewayError, SkipPaymentCycle
 from .events import Events
-from .media_output import MediaOutput
+from .media_output import LagPolicy, MediaOutput
 from .media_publish import MediaPublish, MediaPublishConfig
 from .orchestrator import SelectOrchestrator, _http_origin, post_json
 from .remote_signer import PaymentSession
@@ -108,6 +108,8 @@ class LiveVideoToVideo:
         max_segment_bytes: Optional[int] = None,
         connection_close: bool = False,
         chunk_size: int = 64 * 1024,
+        max_segments: int = 5,
+        on_lag: LagPolicy = LagPolicy.LATEST,
     ) -> MediaOutput:
         """
         Convenience helper to create a `MediaOutput` for this job.
@@ -124,6 +126,8 @@ class LiveVideoToVideo:
             max_segment_bytes=max_segment_bytes,
             connection_close=connection_close,
             chunk_size=chunk_size,
+            max_segments=max_segments,
+            on_lag=on_lag,
         )
 
     @property

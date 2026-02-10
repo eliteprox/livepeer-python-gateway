@@ -150,6 +150,7 @@ class SegmentReader:
     ):
         self.response = response
         self._max_bytes = max_bytes
+        self._local_seq = -1
 
         self._writer = _SegmentBuffer(
             source=response.content,
