@@ -297,7 +297,7 @@ def _sign_byoc_job(
     Returns:
         Tuple of (sender_address, signature_hex)
     """
-    from .orchestrator import _normalize_https_origin, post_json
+    from .orchestrator import _normalize_https_origin, _signer_auth_headers, post_json
 
     base = _normalize_https_origin(signer_base_url)
     url = f"{base}/sign-byoc-job"
@@ -307,7 +307,7 @@ def _sign_byoc_job(
         "parameters": parameters_str,
     }
 
-    data = post_json(url, payload)
+    data = post_json(url, payload, headers=_signer_auth_headers() or None)
 
     sender = data.get("sender")
     signature = data.get("signature")

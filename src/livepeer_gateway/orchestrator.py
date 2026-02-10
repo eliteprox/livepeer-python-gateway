@@ -143,6 +143,18 @@ def post_json(
     return data
 
 
+def _signer_auth_headers() -> dict[str, str]:
+    """
+    Return headers for remote signer requests when JWT auth is required.
+    When LIVEPEER_REMOTE_SIGNER_JWT is set, adds Authorization: Bearer <jwt>.
+    Used for go-livepeer remote signer in JWKS mode (jwt-issuer).
+    """
+    jwt = os.environ.get("LIVEPEER_REMOTE_SIGNER_JWT", "").strip()
+    if jwt:
+        return {"Authorization": f"Bearer {jwt}"}
+    return {}
+
+
 def _normalize_https_base_url(orch_url: str) -> str:
     """
     Normalize an orchestrator base URL to an http(s):// URL with no path/query/fragment.
@@ -592,7 +604,7 @@ def GetPayment(
     if manifest_id:
         payload["manifestId"] = manifest_id
 
-    data = post_json(url, payload)
+    data = post_json(url, payload, headers=_signer_auth_headers() or None)
 
     payment = data.get("payment")
     if not isinstance(payment, str) or not payment:
@@ -845,7 +857,7 @@ def _get_signer_material(signer_base_url: str) -> SignerMaterial:
 
     try:
         # Some signers accept/expect POST with an empty JSON object.
-        data = post_json(signer_url, {}, timeout=5.0)
+        data = post_json(signer_url, {}, headers=_signer_auth_headers() or None, timeout=5.0)
 
         # Expected response shape (example):
         # {
