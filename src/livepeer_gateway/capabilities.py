@@ -49,7 +49,10 @@ CAPABILITY_ID_TO_NAME: dict[int, str] = {
     34: "Image to text",
     35: "Live video to video",
     36: "Text to speech",
+    37: "byoc_external",
 }
+
+CAPABILITY_BYOC_EXTERNAL = 37
 
 
 def capability_name(cap_id: int) -> str:
@@ -106,6 +109,42 @@ class ExternalCapability:
         return compute_available(self.capacity, self.capacity_in_use)
 
 
+@dataclass
+class BYOCCapabilityPrice:
+    """A BYOC capability with its advertised pricing from OrchestratorInfo.capabilities_prices."""
+
+    name: str
+    price_per_unit: int
+    pixels_per_unit: int
+
+
+def get_byoc_capabilities_from_prices(
+    info: lp_rpc_pb2.OrchestratorInfo,
+) -> list[BYOCCapabilityPrice]:
+    """Extract BYOC capabilities from OrchestratorInfo.capabilities_prices.
+
+    Looks for entries with capability == CAPABILITY_BYOC_EXTERNAL (37).
+    The capability name is in the constraint field.
+
+    Args:
+        info: The OrchestratorInfo protobuf message from gRPC response.
+
+    Returns:
+        List of BYOCCapabilityPrice instances with name and advertised pricing.
+    """
+    result: list[BYOCCapabilityPrice] = []
+    for pi in info.capabilities_prices:
+        if pi.capability == CAPABILITY_BYOC_EXTERNAL and pi.constraint:
+            result.append(
+                BYOCCapabilityPrice(
+                    name=pi.constraint,
+                    price_per_unit=pi.pricePerUnit,
+                    pixels_per_unit=pi.pixelsPerUnit,
+                )
+            )
+    return result
+
+
 def get_external_capabilities(
     info: lp_rpc_pb2.OrchestratorInfo,
 ) -> list[ExternalCapability]:
@@ -120,8 +159,8 @@ def get_external_capabilities(
     Note: Pricing is not included in the returned capabilities.
     Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
 
-    Deprecated: Use fetch_external_capabilities() instead, which fetches
-    capabilities directly from the orchestrator's HTTP endpoint.
+    Deprecated: Use get_byoc_capabilities_from_prices() or
+    fetch_external_capabilities() instead.
     """
     result: list[ExternalCapability] = []
     ext_caps = getattr(info, "external_capabilities", None)

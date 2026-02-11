@@ -15,7 +15,14 @@ from .byoc import (
     StartBYOCStreamWithRetry,
     StopBYOCStream,
 )
-from .capabilities import ExternalCapability, fetch_external_capabilities, get_external_capabilities
+from .capabilities import (
+    BYOCCapabilityPrice,
+    CAPABILITY_BYOC_EXTERNAL,
+    ExternalCapability,
+    fetch_external_capabilities,
+    get_byoc_capabilities_from_prices,
+    get_external_capabilities,
+)
 from .control import Control
 from .errors import LivepeerGatewayError, SessionRefreshRequired
 from .events import Events
@@ -30,6 +37,7 @@ from .trickle_subscriber import SegmentReader, TrickleSubscriber
 
 __all__ = [
     "AudioDecodedMediaFrame",
+    "BYOCCapabilityPrice",
     "BYOCJobRequest",
     "BYOCJobResponse",
     "BYOCJobToken",
@@ -38,11 +46,13 @@ __all__ = [
     "BYOCStreamJob",
     "BYOCTokenRefreshConfig",
     "BYOCTokenRefresher",
+    "CAPABILITY_BYOC_EXTERNAL",
     "Control",
     "DecodedMediaFrame",
     "Events",
     "ExternalCapability",
     "fetch_external_capabilities",
+    "get_byoc_capabilities_from_prices",
     "GetBYOCJobToken",
     "GetBYOCPayment",
     "GetOrchestratorInfo",
