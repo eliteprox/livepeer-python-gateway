@@ -1,10 +1,9 @@
 import argparse
 
 from livepeer_gateway.capabilities import (
-    ExternalCapability,
     compute_available,
-    fetch_external_capabilities,
     format_capability,
+    get_byoc_capabilities_from_prices,
     get_capacity_in_use,
     get_per_capability_map,
 )
@@ -142,21 +141,14 @@ def main() -> None:
                 print("Hardware / GPU: not provided")
                 print()
 
-            # Display external/BYOC capabilities (fetched via HTTP endpoint)
-            try:
-                ext_caps = fetch_external_capabilities(orch_url)
-            except Exception as e:
-                print(f"External/BYOC Capabilities: failed to fetch ({e})")
-                ext_caps = []
-            if ext_caps:
+            # Display external/BYOC capabilities from capabilities_prices (cap 37)
+            byoc_caps = get_byoc_capabilities_from_prices(info)
+            if byoc_caps:
                 print("External/BYOC Capabilities:")
-                for cap in ext_caps:
-                    available = cap.capacity_available
-                    print(f"- {cap.name}")
-                    if cap.description:
-                        print(f"    Description: {cap.description}")
-                    print(f"    Capacity: {cap.capacity} (in use: {cap.capacity_in_use}, available: {available})")
-                    # Note: Pricing is fetched separately via GetBYOCJobToken
+                for cap in byoc_caps:
+                    price_per_unit = cap.price_per_unit
+                    pixels_per_unit = cap.pixels_per_unit if cap.pixels_per_unit > 0 else 1
+                    print(f"- {cap.name}: {price_per_unit} wei per {pixels_per_unit} unit(s)")
                 print()
             else:
                 print("External/BYOC Capabilities: none advertised")

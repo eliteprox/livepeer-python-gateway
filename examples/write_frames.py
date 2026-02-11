@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 from livepeer_gateway import (
     BYOCTokenRefreshConfig,
     BYOCTokenRefresher,
-    GetBYOCJobToken,
     GetOrchestratorInfo,
     LivePaymentConfig,
     LivepeerGatewayError,
@@ -20,8 +19,8 @@ from livepeer_gateway import (
     StartBYOCStreamWithRetry,
     StartJobRequest,
     StopBYOCStream,
-    fetch_external_capabilities,
 )
+from livepeer_gateway.capabilities import get_byoc_capabilities_from_prices
 
 DEFAULT_ORCH = "localhost:8935"
 DEFAULT_MODEL_ID = "noop"
@@ -141,17 +140,17 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     # Get orchestrator info
     info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
 
-    # Verify the capability exists (fetch from HTTP endpoint)
-    ext_caps = fetch_external_capabilities(args.orchestrator)
-    cap_names = [c.name for c in ext_caps]
+    # Verify the capability exists via capabilities_prices (capability 37 / byoc_external)
+    byoc_caps = get_byoc_capabilities_from_prices(info)
+    cap_names = [c.name for c in byoc_caps]
     if args.capability not in cap_names:
         available = ", ".join(cap_names) if cap_names else "none"
         raise LivepeerGatewayError(
-            f"Capability '{args.capability}' not found. Available: {available}"
+            f"Capability '{args.capability}' not found in capabilities_prices. Available: {available}"
         )
 
-    # Find the capability info for display
-    cap_info = next((c for c in ext_caps if c.name == args.capability), None)
+    # Find the capability pricing for display
+    cap_info = next((c for c in byoc_caps if c.name == args.capability), None)
 
     # Start BYOC stream (uses retry logic for transient errors)
     params = {}  # Add any workflow-specific params here
@@ -168,16 +167,7 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     print("=== BYOC Stream ===")
     print("capability:", args.capability)
     if cap_info:
-        print(f"  description: {cap_info.description or 'N/A'}")
-    # Fetch job token to display accurate pricing for this sender
-    if args.signer:
-        try:
-            job_token = GetBYOCJobToken(info, args.capability, args.signer)
-            print(f"  price: {job_token.price_per_unit} wei per {job_token.pixels_per_unit} unit(s)")
-            print(f"  balance: {job_token.balance}")
-            print(f"  available_capacity: {job_token.available_capacity}")
-        except Exception as e:
-            print(f"  price: (could not fetch job token: {e})")
+        print(f"  price: {cap_info.price_per_unit} wei per {cap_info.pixels_per_unit} unit(s)")
     print("stream_id:", stream_job.stream_id)
     print("publish_url:", stream_job.publish_url)
     print("subscribe_url:", stream_job.subscribe_url)

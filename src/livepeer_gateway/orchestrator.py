@@ -30,6 +30,7 @@ from .errors import LivepeerGatewayError, SessionRefreshRequired
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
 
 CAPABILITY_LIVE_VIDEO_TO_VIDEO = 35
+CAPABILITY_BYOC_EXTERNAL = 37
 
 def _truncate(s: str, max_len: int = 2000) -> str:
     if len(s) <= max_len:
@@ -210,10 +211,9 @@ def _select_price_info(
     """
     Choose the price info to use for a payment request.
 
-    For LV2V, prefer a capability-scoped price that matches the requested model ID.
+    For LV2V, prefer a capability-scoped price matching the requested model ID (cap 35).
+    For BYOC, look up byoc_external pricing matching the capability name (cap 37).
     Fallback to the general price_info only if no matching capability price exists.
-
-    Note: BYOC pricing should be fetched via GetBYOCJobToken from byoc.py, not this function.
     """
     if typ == "lv2v":
         if not model_id:
@@ -238,11 +238,22 @@ def _select_price_info(
         )
 
     if typ == "byoc":
-        # BYOC pricing is now fetched via GetBYOCJobToken from the /process/token endpoint.
-        # This provides accurate per-sender pricing. Use GetBYOCJobToken instead.
+        if not capability:
+            raise LivepeerGatewayError("GetPayment requires capability for BYOC pricing.")
+
+        # Capability 37 corresponds to byoc_external.
+        for pi in info.capabilities_prices:
+            if (
+                pi.capability == CAPABILITY_BYOC_EXTERNAL
+                and pi.pricePerUnit > 0
+                and pi.pixelsPerUnit > 0
+                and pi.constraint == capability
+            ):
+                return pi
+
         raise LivepeerGatewayError(
-            "BYOC pricing should be fetched via GetBYOCJobToken, not _select_price_info. "
-            "Use byoc.GetBYOCJobToken() to get pricing from the /process/token endpoint."
+            f"No capability price found for BYOC capability={capability}; "
+            "orchestrator did not return usable pricing."
         )
 
     # Non-LV2V/BYOC: use general price_info first, otherwise any valid capability price.

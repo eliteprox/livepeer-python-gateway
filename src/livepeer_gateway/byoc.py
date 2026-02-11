@@ -345,13 +345,18 @@ def GetBYOCPayment(
     """Get payment credentials for a BYOC capability from the remote signer.
 
     This function requests payment credentials from the remote signer using
-    the "byoc" job type. The payment is time-based rather than pixel-based.
+    the "byoc" job type.
+
+    When a job_token is provided, its sender-specific pricing and ticket_params
+    are used. Otherwise, pricing is resolved from OrchestratorInfo.capabilities_prices
+    (capability 37 / byoc_external) — the same path used for LV2V pricing.
 
     Args:
         signer_base_url: Base URL of the remote signer.
         info: OrchestratorInfo containing ticket params and pricing.
         capability: Name of the BYOC capability (e.g., "comfystream").
-        job_token: BYOCJobToken with pricing from GetBYOCJobToken (fetched if not provided).
+        job_token: Optional BYOCJobToken with sender-specific pricing from GetBYOCJobToken.
+            If not provided, advertised pricing from capabilities_prices is used.
         state: Previous payment state for nonce continuity.
         manifest_id: Optional manifest ID for balance tracking.
 
@@ -360,10 +365,22 @@ def GetBYOCPayment(
     """
     from .orchestrator import GetPayment
 
-    # Fetch job token if not provided
-    if job_token is None:
-        job_token = GetBYOCJobToken(info, capability, signer_base_url)
+    if job_token is not None:
+        # Use sender-specific pricing and ticket_params from job token
+        return GetPayment(
+            signer_base_url,
+            info,
+            typ="byoc",
+            capability=capability,
+            state=state,
+            manifest_id=manifest_id,
+            price_per_unit=job_token.price_per_unit,
+            pixels_per_unit=job_token.pixels_per_unit,
+            ticket_params=job_token.ticket_params,
+        )
 
+    # No job token: use advertised pricing from capabilities_prices (cap 37)
+    # via _select_price_info — same path as LV2V
     return GetPayment(
         signer_base_url,
         info,
@@ -371,9 +388,6 @@ def GetBYOCPayment(
         capability=capability,
         state=state,
         manifest_id=manifest_id,
-        price_per_unit=job_token.price_per_unit,
-        pixels_per_unit=job_token.pixels_per_unit,
-        ticket_params=job_token.ticket_params,
     )
 
 
