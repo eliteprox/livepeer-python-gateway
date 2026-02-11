@@ -2,15 +2,10 @@ import argparse
 import asyncio
 import json
 
-from livepeer_gateway.orchestrator import (
-    GetOrchestratorInfo,
-    LivepeerGatewayError,
-    StartJob,
-    StartJobRequest,
-)
+from livepeer_gateway.errors import LivepeerGatewayError
+from livepeer_gateway.lv2v import StartJobRequest, start_lv2v
 
 
-DEFAULT_ORCH = "localhost:8935"
 DEFAULT_MODEL_ID = "noop"  # fix
 
 
@@ -19,18 +14,18 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "orchestrator",
         nargs="?",
-        default=DEFAULT_ORCH,
-        help=f"Orchestrator gRPC target (host:port). Default: {DEFAULT_ORCH}",
+        default=None,
+        help="Orchestrator (host:port). If omitted, discovery is used.",
     )
     p.add_argument(
         "--signer",
         default=None,
-        help="Remote signer base URL (no path). If omitted, runs in offchain mode.",
+        help="Remote signer URL (no path). If omitted, runs in offchain mode.",
     )
     p.add_argument(
-        "--model-id",
+        "--model",
         default=DEFAULT_MODEL_ID,
-        help=f"Pipeline model_id to start via /live-video-to-video. Default: {DEFAULT_MODEL_ID}",
+        help=f"Pipeline model to start via /live-video-to-video. Default: {DEFAULT_MODEL_ID}",
     )
     p.add_argument(
         "--message",
@@ -46,11 +41,10 @@ async def main() -> None:
     args = _parse_args()
 
     try:
-        info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
-        job = StartJob(
-            info,
-            StartJobRequest(model_id=args.model_id),
-            signer_base_url=args.signer,
+        job = start_lv2v(
+            args.orchestrator,
+            StartJobRequest(model_id=args.model),
+            signer_url=args.signer,
         )
 
         print("=== LiveVideoToVideo ===")
@@ -70,7 +64,7 @@ async def main() -> None:
                 await asyncio.sleep(args.interval)
 
     except LivepeerGatewayError as e:
-        print(f"ERROR ({args.orchestrator}): {e}")
+        print(f"ERROR: {e}")
     finally:
         try:
             if "job" in locals():

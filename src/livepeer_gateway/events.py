@@ -9,6 +9,8 @@ from typing import Any, AsyncIterator, Optional
 from .errors import LivepeerGatewayError
 from .trickle_subscriber import TrickleSubscriber
 
+_LOG = logging.getLogger(__name__)
+
 
 class Events:
     def __init__(self, events_url: str) -> None:
@@ -36,8 +38,9 @@ class Events:
         async def _read_all(segment: "SegmentReader", *, chunk_size: int = 33 * 1024) -> bytes:
             parts = []
             try:
+                reader = segment.make_reader()
                 while True:
-                    chunk = await segment.read(chunk_size=chunk_size)
+                    chunk = await reader.read(chunk_size=chunk_size)
                     if not chunk:
                         break
                     parts.append(chunk)
@@ -74,7 +77,7 @@ class Events:
                     return
                 except asyncio.QueueFull:
                     if overflow == "drop_newest":
-                        logging.warning("Trickle events queue full; dropping newest event")
+                        _LOG.warning("Trickle events queue full; dropping newest event")
                         return
                     if overflow == "drop_oldest":
                         try:
@@ -84,7 +87,7 @@ class Events:
                         try:
                             queue.put_nowait(data)
                         except asyncio.QueueFull:
-                            logging.warning(
+                            _LOG.warning(
                                 "Trickle events queue full; dropping newest event after drop_oldest"
                             )
                         return

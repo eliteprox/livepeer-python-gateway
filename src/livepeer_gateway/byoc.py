@@ -136,18 +136,14 @@ class BYOCStreamJob:
 
     def media_output(
         self,
-        output_path: Optional[str] = None,
-        output_url: Optional[str] = None,
-        max_frames: int = -1,
-        write_pts: bool = False,
+        *,
+        start_seq: int = -2,
+        max_retries: int = 5,
+        max_segment_bytes: Optional[int] = None,
+        connection_close: bool = False,
+        chunk_size: int = 64 * 1024,
     ) -> MediaOutput:
         """Create a media output subscriber for receiving processed video.
-
-        Args:
-            output_path: Local path to write output frames.
-            output_url: URL to stream output frames to.
-            max_frames: Maximum number of frames to receive (-1 for unlimited).
-            write_pts: Whether to include PTS in output filenames.
 
         Returns:
             MediaOutput instance for receiving processed frames.
@@ -159,10 +155,11 @@ class BYOCStreamJob:
             raise ValueError("Video egress not enabled for this stream (no subscribe_url)")
         return MediaOutput(
             self.subscribe_url,
-            output_path=output_path,
-            output_url=output_url,
-            max_frames=max_frames,
-            write_pts=write_pts,
+            start_seq=start_seq,
+            max_retries=max_retries,
+            max_segment_bytes=max_segment_bytes,
+            connection_close=connection_close,
+            chunk_size=chunk_size,
         )
 
 

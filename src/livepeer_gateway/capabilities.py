@@ -3,12 +3,53 @@ from __future__ import annotations
 import json
 import ssl
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+from enum import IntEnum
+from typing import Any, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-if TYPE_CHECKING:
-    from . import lp_rpc_pb2
+from . import lp_rpc_pb2
+
+
+class CapabilityId(IntEnum):
+    INVALID = -2
+    UNUSED = -1
+    H264 = 0
+    MPEGTS = 1
+    MP4 = 2
+    FRACTIONAL_FRAMERATES = 3
+    STORAGE_DIRECT = 4
+    STORAGE_S3 = 5
+    STORAGE_GCS = 6
+    H264_BASELINE_PROFILE = 7
+    H264_MAIN_PROFILE = 8
+    H264_HIGH_PROFILE = 9
+    H264_CONSTRAINED_CONTAINED_HIGH_PROFILE = 10
+    GOP = 11
+    AUTH_TOKEN = 12
+    MPEG7_SIGNATURE = 14
+    HEVC_DECODE = 15
+    HEVC_ENCODE = 16
+    VP8_DECODE = 17
+    VP9_DECODE = 18
+    VP8_ENCODE = 19
+    VP9_ENCODE = 20
+    H264_DECODE_YUV444_8BIT = 21
+    H264_DECODE_YUV422_8BIT = 22
+    H264_DECODE_YUV444_10BIT = 23
+    H264_DECODE_YUV422_10BIT = 24
+    H264_DECODE_YUV420_10BIT = 25
+    SEGMENT_SLICING = 26
+    TEXT_TO_IMAGE = 27
+    IMAGE_TO_IMAGE = 28
+    IMAGE_TO_VIDEO = 29
+    UPSCALE = 30
+    AUDIO_TO_TEXT = 31
+    SEGMENT_ANYTHING_2 = 32
+    LLM = 33
+    IMAGE_TO_TEXT = 34
+    LIVE_VIDEO_TO_VIDEO = 35
+    TEXT_TO_SPEECH = 36
 
 CAPABILITY_ID_TO_NAME: dict[int, str] = {
     -2: "Invalid",
@@ -90,13 +131,28 @@ def get_capacity_in_use(model_constraint: Any) -> int:
     return 0
 
 
+def build_capabilities(
+    capability: CapabilityId,
+    constraint: Optional[str],
+) -> lp_rpc_pb2.Capabilities:
+    """
+    Build a capabilities message with an optional per-capability model constraint.
+    """
+    caps = lp_rpc_pb2.Capabilities()
+    cap_id = int(capability)
+    caps.capacities[cap_id] = 1
+    if constraint:
+        caps.constraints.PerCapability[cap_id].models[constraint]
+    return caps
+
+
+# ---------------------------------------------------------------------------
+# BYOC capability types
+# ---------------------------------------------------------------------------
+
 @dataclass
 class ExternalCapability:
-    """Represents an external/BYOC capability offered by an orchestrator.
-
-    Note: Pricing is not included here. Use byoc.GetBYOCJobToken() to fetch
-    accurate per-sender pricing from the orchestrator's /process/token endpoint.
-    """
+    """Represents an external/BYOC capability offered by an orchestrator."""
 
     name: str
     description: str
@@ -105,7 +161,6 @@ class ExternalCapability:
 
     @property
     def capacity_available(self) -> int:
-        """Return the available capacity (total - in use)."""
         return compute_available(self.capacity, self.capacity_in_use)
 
 
@@ -125,12 +180,6 @@ def get_byoc_capabilities_from_prices(
 
     Looks for entries with capability == CAPABILITY_BYOC_EXTERNAL (37).
     The capability name is in the constraint field.
-
-    Args:
-        info: The OrchestratorInfo protobuf message from gRPC response.
-
-    Returns:
-        List of BYOCCapabilityPrice instances with name and advertised pricing.
     """
     result: list[BYOCCapabilityPrice] = []
     for pi in info.capabilities_prices:
@@ -148,20 +197,7 @@ def get_byoc_capabilities_from_prices(
 def get_external_capabilities(
     info: lp_rpc_pb2.OrchestratorInfo,
 ) -> list[ExternalCapability]:
-    """Extract external/BYOC capabilities from OrchestratorInfo.
-
-    Args:
-        info: The OrchestratorInfo protobuf message from gRPC response.
-
-    Returns:
-        List of ExternalCapability instances parsed from the info.
-
-    Note: Pricing is not included in the returned capabilities.
-    Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
-
-    Deprecated: Use get_byoc_capabilities_from_prices() or
-    fetch_external_capabilities() instead.
-    """
+    """Extract external/BYOC capabilities from OrchestratorInfo."""
     result: list[ExternalCapability] = []
     ext_caps = getattr(info, "external_capabilities", None)
     if ext_caps is None:
@@ -185,26 +221,9 @@ def fetch_external_capabilities(
     timeout: float = 10.0,
     ssl_context: Optional[ssl.SSLContext] = None,
 ) -> list[ExternalCapability]:
-    """Fetch external/BYOC capabilities from orchestrator's HTTP endpoint.
-
-    Args:
-        orch_url: The orchestrator URL (e.g., "https://10.10.7.61:8933").
-        timeout: Request timeout in seconds.
-        ssl_context: Optional SSL context for HTTPS connections.
-
-    Returns:
-        List of ExternalCapability instances.
-
-    Raises:
-        Exception: If the request fails or returns invalid data.
-
-    Note: Pricing is not included in the returned capabilities.
-    Use byoc.GetBYOCJobToken() to fetch accurate per-sender pricing.
-    """
-    # Normalize URL
+    """Fetch external/BYOC capabilities from orchestrator's HTTP endpoint."""
     url = orch_url.rstrip("/") + "/byoc/capabilities"
 
-    # Create SSL context if not provided (allow self-signed certs)
     if ssl_context is None:
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
@@ -240,4 +259,3 @@ def fetch_external_capabilities(
             )
         )
     return result
-

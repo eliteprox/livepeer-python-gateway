@@ -6,6 +6,11 @@ from typing import Optional
 
 import aiohttp
 
+from .segment_reader import SegmentReader
+
+
+_LOG = logging.getLogger(__name__)
+
 
 class TrickleSubscriber:
     """
@@ -70,7 +75,7 @@ class TrickleSubscriber:
         headers = {"Connection": "close"} if self._connection_close else None
 
         for attempt in range(0, self._max_retries):
-            logging.info("Trickle sub preconnect attempt=%s url=%s", attempt, url)
+            _LOG.debug("Trickle sub preconnect attempt=%s url=%s", attempt, url)
             try:
                 resp = await self._session.get(url, headers=headers)
 
@@ -79,7 +84,7 @@ class TrickleSubscriber:
                     return resp
 
                 if resp.status == 404:
-                    logging.info("Trickle sub got 404, terminating %s", url)
+                    _LOG.debug("Trickle sub got 404, terminating %s", url)
                     resp.release()
                     self._errored = True
                     return None
@@ -93,21 +98,21 @@ class TrickleSubscriber:
                         seq = -1
                     self._seq = seq
                     url = self._segment_url(seq)
-                    logging.info("Trickle sub resetting index to leading edge %s", url)
+                    _LOG.debug("Trickle sub resetting index to leading edge %s", url)
                     resp.release()
                     continue
 
                 body = await resp.text()
                 resp.release()
-                logging.error("Trickle sub failed GET %s status=%s msg=%s", url, resp.status, body)
+                _LOG.error("Trickle sub failed GET %s status=%s msg=%s", url, resp.status, body)
 
             except Exception:
-                logging.exception("Trickle sub failed to complete GET %s", url)
+                _LOG.exception("Trickle sub failed to complete GET %s", url)
 
             if attempt < self._max_retries - 1:
                 await asyncio.sleep(0.5)
 
-        logging.error("Trickle sub hit max retries, exiting %s", url)
+        _LOG.error("Trickle sub hit max retries, exiting %s", url)
         self._errored = True
         return None
 
@@ -118,12 +123,12 @@ class TrickleSubscriber:
 
         async with self._lock:
             if self._errored:
-                logging.info("Trickle subscription closed or errored for %s", self.base_url)
+                _LOG.debug("Trickle subscription closed or errored for %s", self.base_url)
                 return None
 
             # If we don't have a pending GET request, preconnect
             if self._pending_get is None:
-                logging.debug("Trickle sub no pending connection, preconnecting...")
+                _LOG.debug("Trickle sub no pending connection, preconnecting...")
                 self._pending_get = await self._preconnect()
 
             # Extract the current connection to use for reading
@@ -170,7 +175,7 @@ class TrickleSubscriber:
         await self._ensure_runtime()
         assert self._lock is not None
 
-        logging.info("Trickle sub closing %s", self.base_url)
+        _LOG.debug("Trickle sub closing %s", self.base_url)
         async with self._lock:
             self._errored = True
             if self._pending_get:
@@ -180,55 +185,8 @@ class TrickleSubscriber:
                 try:
                     await self._session.close()
                 except Exception:
-                    logging.error("Error closing trickle subscriber", exc_info=True)
+                    _LOG.error("Error closing trickle subscriber", exc_info=True)
                 finally:
                     self._session = None
 
-
-class SegmentReader:
-    def __init__(self, response: aiohttp.ClientResponse, max_bytes: Optional[int] = None):
-        self.response = response
-        self._max_bytes = max_bytes
-        self._total_bytes = 0
-
-    def seq(self) -> int:
-        """Extract the sequence number from the response headers."""
-        seq_str = self.response.headers.get("Lp-Trickle-Seq")
-        try:
-            seq = int(seq_str)
-        except (TypeError, ValueError):
-            return -1
-        return seq
-
-    def eos(self) -> bool:
-        return self.response.headers.get("Lp-Trickle-Closed") is not None
-
-    def headers(self) -> "aiohttp.typedefs.LooseHeaders":
-        return self.response.headers
-
-    async def read(self, chunk_size: int = 32 * 1024) -> Optional[bytes]:
-        """Read the next chunk of the segment."""
-        if not self.response:
-            await self.close()
-            return None
-        chunk = await self.response.content.read(chunk_size)
-        if not chunk:
-            await self.close()
-            return None
-        if self._max_bytes is not None:
-            self._total_bytes += len(chunk)
-            if self._total_bytes > self._max_bytes:
-                await self.close()
-                raise ValueError(
-                    f"Trickle segment exceeds max size ({self._total_bytes} > {self._max_bytes})"
-                )
-        return chunk
-
-    async def close(self) -> None:
-        """Ensure the response is properly closed when done."""
-        if self.response is None:
-            return
-        if not self.response.closed:
-            self.response.release()
-            self.response.close()
 
