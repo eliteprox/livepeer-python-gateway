@@ -158,7 +158,7 @@ async def run_stream(args: argparse.Namespace) -> None:
 
         # Create refresh callback for handling HTTP 480 (session refresh required)
         def refresh_orch_info():
-            return GetOrchestratorInfo(args.orchestrator, args.signer)
+            return GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
 
         token_refresher = BYOCTokenRefresher(
             args.signer,

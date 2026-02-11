@@ -7,15 +7,16 @@ from typing import Optional
 from . import lp_rpc_pb2
 from .errors import LivepeerGatewayError, SessionRefreshRequired
 from .live_payment import LivePaymentSender, LivePaymentConfig
-from .orchestrator import (
-    GetPaymentResponse,
-    GetPayment,
-    LiveVideoToVideo,
-    OrchestratorClient,
-    StartJobRequest,
-    _start_job_with_headers,
-    build_capabilities,
+from .capabilities import (
     CAPABILITY_LIVE_VIDEO_TO_VIDEO,
+    build_capabilities,
+)
+from .lv2v import LiveVideoToVideo, StartJobRequest
+from .orchestrator import (
+    GetPayment,
+    GetPaymentResponse,
+    OrchestratorClient,
+    _start_job_with_headers,
 )
 
 

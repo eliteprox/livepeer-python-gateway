@@ -26,9 +26,11 @@ class SignerMaterial:
     """
     Material returned by the remote signer.
     address: 20-byte broadcaster ETH address
+    address_hex: original checksummed hex string (e.g. "0x1234...abcd")
     sig: signature bytes (length depends on scheme; commonly 65 bytes for ECDSA)
     """
     address: bytes
+    address_hex: str
     sig: bytes
 
 
@@ -69,7 +71,7 @@ def get_orch_info_sig(signer_url: str) -> SignerMaterial:
 
     # check for offchain mode
     if not signer_url:
-        return SignerMaterial(address=None, sig=None)
+        return SignerMaterial(address=None, address_hex=None, sig=None)
 
     # Accept either a base URL or a full URL that includes /sign-orchestrator-info.
     # Normalize to an https:// origin and append the expected path.
@@ -91,7 +93,8 @@ def get_orch_info_sig(signer_url: str) -> SignerMaterial:
                 cause=None,
             ) from None
 
-        address = _hex_to_bytes(str(data["address"]), expected_len=20)
+        address_hex = str(data["address"])
+        address = _hex_to_bytes(address_hex, expected_len=20)
         sig = _hex_to_bytes(str(data["signature"]))  # signature length may vary
 
     except LivepeerGatewayError as e:
@@ -135,7 +138,7 @@ def get_orch_info_sig(signer_url: str) -> SignerMaterial:
             cause=cause if isinstance(cause, BaseException) else e,
         ) from None
 
-    return SignerMaterial(address=address, sig=sig)
+    return SignerMaterial(address=address, address_hex=address_hex, sig=sig)
 
 
 class PaymentSession:

@@ -186,10 +186,10 @@ def GetBYOCJobToken(
         LivepeerGatewayError: If the token request fails.
     """
     from .errors import LivepeerGatewayError
-    from .orchestrator import _get_signer_material
+    from .remote_signer import get_orch_info_sig
 
     # Get sender address and signature from signer
-    signer_material = _get_signer_material(signer_base_url)
+    signer_material = get_orch_info_sig(signer_base_url)
     if signer_material.address is None or signer_material.sig is None:
         raise LivepeerGatewayError(
             "Cannot get job token: signer did not return address/signature"
@@ -346,7 +346,7 @@ def GetBYOCPayment(
 
     When a job_token is provided, its sender-specific pricing and ticket_params
     are used. Otherwise, pricing is resolved from OrchestratorInfo.capabilities_prices
-    (capability 37 / byoc_external) — the same path used for LV2V pricing.
+    (capability 37 / byoc) — the same path used for LV2V pricing.
 
     Args:
         signer_base_url: Base URL of the remote signer.

@@ -140,7 +140,7 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
     # Get orchestrator info
     info = GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
 
-    # Verify the capability exists via capabilities_prices (capability 37 / byoc_external)
+    # Verify the capability exists via capabilities_prices (capability 37 / byoc)
     byoc_caps = get_byoc_capabilities_from_prices(info)
     cap_names = [c.name for c in byoc_caps]
     if args.capability not in cap_names:
@@ -181,7 +181,7 @@ async def run_byoc_mode(args: argparse.Namespace) -> None:
 
         # Create refresh callback for handling HTTP 480 (session refresh required)
         def refresh_orch_info():
-            return GetOrchestratorInfo(args.orchestrator, args.signer)
+            return GetOrchestratorInfo(args.orchestrator, signer_url=args.signer)
 
         token_refresher = BYOCTokenRefresher(
             args.signer,

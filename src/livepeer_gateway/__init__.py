@@ -17,7 +17,8 @@ from .byoc import (
 )
 from .capabilities import (
     BYOCCapabilityPrice,
-    CAPABILITY_BYOC_EXTERNAL,
+    CAPABILITY_BYOC,
+    CAPABILITY_LIVE_VIDEO_TO_VIDEO,
     CapabilityId,
     ExternalCapability,
     build_capabilities,
@@ -35,7 +36,7 @@ from .errors import (
 )
 from .events import Events
 from .live_payment import LivePaymentConfig, LivePaymentSender
-from .lv2v import start_lv2v
+from .lv2v import LiveVideoToVideo, StartJobRequest, start_lv2v
 from .media_decode import AudioDecodedMediaFrame, DecodedMediaFrame, VideoDecodedMediaFrame
 from .media_output import MediaOutput
 from .media_publish import MediaPublish, MediaPublishConfig
@@ -44,11 +45,9 @@ from .orchestrator import (
     DiscoverOrchestrators,
     GetOrchestratorInfo,
     GetPayment,
-    LiveVideoToVideo,
     PaymentState,
     SelectOrchestrator,
     StartJob,
-    StartJobRequest,
 )
 from .orchestrator_session import OrchestratorSession
 from .remote_signer import PaymentSession
@@ -67,7 +66,8 @@ __all__ = [
     "BYOCStreamJob",
     "BYOCTokenRefreshConfig",
     "BYOCTokenRefresher",
-    "CAPABILITY_BYOC_EXTERNAL",
+    "CAPABILITY_BYOC",
+    "CAPABILITY_LIVE_VIDEO_TO_VIDEO",
     "CapabilityId",
     "Control",
     "DecodedMediaFrame",

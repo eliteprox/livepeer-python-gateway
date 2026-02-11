@@ -90,10 +90,11 @@ CAPABILITY_ID_TO_NAME: dict[int, str] = {
     34: "Image to text",
     35: "Live video to video",
     36: "Text to speech",
-    37: "byoc_external",
+    37: "Bring Your Own Container",
 }
 
-CAPABILITY_BYOC_EXTERNAL = 37
+CAPABILITY_LIVE_VIDEO_TO_VIDEO = 35
+CAPABILITY_BYOC = 37
 
 
 def capability_name(cap_id: int) -> str:
@@ -178,12 +179,12 @@ def get_byoc_capabilities_from_prices(
 ) -> list[BYOCCapabilityPrice]:
     """Extract BYOC capabilities from OrchestratorInfo.capabilities_prices.
 
-    Looks for entries with capability == CAPABILITY_BYOC_EXTERNAL (37).
+    Looks for entries with capability == CAPABILITY_BYOC (37).
     The capability name is in the constraint field.
     """
     result: list[BYOCCapabilityPrice] = []
     for pi in info.capabilities_prices:
-        if pi.capability == CAPABILITY_BYOC_EXTERNAL and pi.constraint:
+        if pi.capability == CAPABILITY_BYOC and pi.constraint:
             result.append(
                 BYOCCapabilityPrice(
                     name=pi.constraint,

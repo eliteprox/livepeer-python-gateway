@@ -1,43 +1,33 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
-import re
 import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
-from functools import lru_cache
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Tuple
 from urllib.parse import ParseResult, urlparse
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
 
-import grpc
-
 from . import lp_rpc_pb2
-from . import lp_rpc_pb2_grpc
 
-from .control import Control
+from .capabilities import (
+    CAPABILITY_BYOC,
+    CAPABILITY_LIVE_VIDEO_TO_VIDEO,
+    build_capabilities,
+)
 from .errors import (
     LivepeerGatewayError,
     NoOrchestratorAvailableError,
     SignerRefreshRequired,
     SkipPaymentCycle,
 )
-from .events import Events
-from .media_output import MediaOutput
-from .media_publish import MediaPublish, MediaPublishConfig
 from .orch_info import get_orch_info, create_orchestrator_stub, call_get_orchestrator
 from .remote_signer import RemoteSignerError, get_orch_info_sig
 
 _LOG = logging.getLogger(__name__)
-
-_HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
-
-CAPABILITY_LIVE_VIDEO_TO_VIDEO = 35
-CAPABILITY_BYOC_EXTERNAL = 37
 
 # ---------------------------------------------------------------------------
 # HTTP helpers (from main's refactor)
@@ -236,28 +226,6 @@ _normalize_https_origin = _http_origin
 
 
 # ---------------------------------------------------------------------------
-# Capabilities builder (BYOC-aware version from feature branch)
-# ---------------------------------------------------------------------------
-
-def build_capabilities(capability: int, constraint: Optional[str]) -> lp_rpc_pb2.Capabilities:
-    """
-    Build a capabilities message with an optional constraint for a specific capability.
-    """
-    caps = lp_rpc_pb2.Capabilities()
-    if capability:
-        caps.capacities[capability] = 1
-        if constraint:
-            if not caps.HasField("constraints"):
-                caps.constraints.CopyFrom(lp_rpc_pb2.Capabilities.Constraints())
-            constraints = caps.constraints
-            per_cap = getattr(constraints, "PerCapability", None) or getattr(constraints, "per_capability", None)
-            if per_cap is None:
-                per_cap = constraints.PerCapability
-            per_cap[capability].models[constraint].warm = False
-    return caps
-
-
-# ---------------------------------------------------------------------------
 # Orchestrator discovery and selection (from main's refactor)
 # ---------------------------------------------------------------------------
 
@@ -441,7 +409,7 @@ def _select_price_info(
     Choose the price info to use for a payment request.
 
     For LV2V, prefer a capability-scoped price matching the requested model ID (cap 35).
-    For BYOC, look up byoc_external pricing matching the capability name (cap 37).
+    For BYOC, look up byoc pricing matching the capability name (cap 37).
     Fallback to the general price_info only if no matching capability price exists.
     """
     if typ == "lv2v":
@@ -466,7 +434,7 @@ def _select_price_info(
             raise LivepeerGatewayError("GetPayment requires capability for BYOC pricing.")
         for pi in info.capabilities_prices:
             if (
-                pi.capability == CAPABILITY_BYOC_EXTERNAL
+                pi.capability == CAPABILITY_BYOC
                 and pi.pricePerUnit > 0
                 and pi.pixelsPerUnit > 0
                 and pi.constraint == capability
@@ -648,112 +616,17 @@ def GetPayment(
 
 
 # ---------------------------------------------------------------------------
-# Job types and helpers (from feature branch)
+# Job helpers (from feature branch)
 # ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class StartJobRequest:
-    request_id: Optional[str] = None
-    model_id: Optional[str] = None
-    params: Optional[dict[str, Any]] = None
-    stream_id: Optional[str] = None
-
-    def to_json(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        if self.request_id is not None:
-            payload["gateway_request_id"] = self.request_id
-        if self.model_id is not None:
-            payload["model_id"] = self.model_id
-        if self.params is not None:
-            payload["params"] = self.params
-        if self.stream_id is not None:
-            payload["stream_id"] = self.stream_id
-        return payload
-
-
-@dataclass(frozen=True)
-class LiveVideoToVideo:
-    raw: dict[str, Any]
-    manifest_id: Optional[str] = None
-    publish_url: Optional[str] = None
-    subscribe_url: Optional[str] = None
-    control_url: Optional[str] = None
-    events_url: Optional[str] = None
-    control: Optional[Control] = None
-    events: Optional[Events] = None
-    _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
-
-    @staticmethod
-    def from_json(data: dict[str, Any]) -> "LiveVideoToVideo":
-        control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
-        control = Control(control_url) if control_url else None
-        publish_url = data.get("publish_url") if isinstance(data.get("publish_url"), str) else None
-        events_url = data.get("events_url") if isinstance(data.get("events_url"), str) else None
-        events = Events(events_url) if events_url else None
-        return LiveVideoToVideo(
-            raw=data,
-            control_url=control_url,
-            events_url=events_url,
-            manifest_id=data.get("manifest_id") if isinstance(data.get("manifest_id"), str) else None,
-            publish_url=publish_url,
-            subscribe_url=data.get("subscribe_url") if isinstance(data.get("subscribe_url"), str) else None,
-            control=control,
-            events=events,
-        )
-
-    def start_media(self, config: MediaPublishConfig) -> MediaPublish:
-        if not self.publish_url:
-            raise LivepeerGatewayError("No publish_url present on this LiveVideoToVideo job")
-        if self._media is None:
-            media = MediaPublish(
-                self.publish_url,
-                mime_type=config.mime_type,
-                keyframe_interval_s=config.keyframe_interval_s,
-                fps=config.fps,
-            )
-            object.__setattr__(self, "_media", media)
-        return self._media
-
-    def media_output(
-        self,
-        *,
-        start_seq: int = -2,
-        max_retries: int = 5,
-        max_segment_bytes: Optional[int] = None,
-        connection_close: bool = False,
-        chunk_size: int = 64 * 1024,
-    ) -> MediaOutput:
-        if not self.subscribe_url:
-            raise LivepeerGatewayError("No subscribe_url present on this LiveVideoToVideo job")
-        return MediaOutput(
-            self.subscribe_url,
-            start_seq=start_seq,
-            max_retries=max_retries,
-            max_segment_bytes=max_segment_bytes,
-            connection_close=connection_close,
-            chunk_size=chunk_size,
-        )
-
-    async def close(self) -> None:
-        tasks = []
-        if self.control is not None:
-            tasks.append(self.control.close_control())
-        if self._media is not None:
-            tasks.append(self._media.close())
-        if not tasks:
-            return
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-
 
 def _start_job_with_headers(
     info: lp_rpc_pb2.OrchestratorInfo,
-    req: StartJobRequest,
+    req,
     headers: dict[str, Optional[str]],
-) -> LiveVideoToVideo:
+):
     """Internal helper to start a job with pre-built headers."""
+    from .lv2v import LiveVideoToVideo
+
     base = _http_origin(info.transcoder)
     url = f"{base}/live-video-to-video"
     data = post_json(url, req.to_json(), headers=headers)
@@ -762,11 +635,11 @@ def _start_job_with_headers(
 
 def StartJob(
     info: lp_rpc_pb2.OrchestratorInfo,
-    req: StartJobRequest,
+    req,
     *,
     signer_base_url: Optional[str] = None,
     typ: str = "lv2v",
-) -> LiveVideoToVideo:
+):
     """
     Start a live video-to-video job.
     """
@@ -783,92 +656,8 @@ def StartJob(
 
 
 # ---------------------------------------------------------------------------
-# Signer material and OrchestratorClient (from feature branch)
+# OrchestratorClient (from feature branch)
 # ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class SignerMaterial:
-    """
-    Material returned by the remote signer.
-    """
-    address: bytes
-    address_hex: str
-    sig: bytes
-
-
-def _hex_to_bytes(s: str, *, expected_len: Optional[int] = None) -> bytes:
-    s = s.strip()
-    if not _HEX_RE.match(s):
-        raise ValueError(f"Not a hex string: {s!r}")
-    if s.startswith(("0x", "0X")):
-        s = s[2:]
-    if len(s) % 2 == 1:
-        s = "0" + s
-    b = bytes.fromhex(s)
-    if expected_len is not None and len(b) != expected_len:
-        raise ValueError(f"Expected {expected_len} bytes, got {len(b)} bytes")
-    return b
-
-
-@lru_cache(maxsize=None)
-def _get_signer_material(signer_base_url: str) -> SignerMaterial:
-    """
-    Fetch signer material exactly once per signer_base_url for the lifetime of the process.
-    """
-    if not signer_base_url:
-        return SignerMaterial(address=None, address_hex=None, sig=None)
-
-    signer_url = f"{_http_origin(signer_base_url)}/sign-orchestrator-info"
-
-    try:
-        data = post_json(signer_url, {}, timeout=5.0)
-        if "address" not in data or "signature" not in data:
-            raise RemoteSignerError(
-                signer_url,
-                f"Remote signer JSON must contain 'address' and 'signature': {data!r}",
-                cause=None,
-            ) from None
-
-        address_hex = str(data["address"])
-        address = _hex_to_bytes(address_hex, expected_len=20)
-        sig = _hex_to_bytes(str(data["signature"]))
-
-    except LivepeerGatewayError as e:
-        cause = e.__cause__ or e
-        if isinstance(cause, HTTPError):
-            body = _extract_error_message(cause)
-            body_part = f"; body={body!r}" if body else ""
-            raise RemoteSignerError(
-                signer_url,
-                f"HTTP {cause.code} from signer{body_part}",
-                cause=cause,
-            ) from None
-        if isinstance(cause, ConnectionRefusedError):
-            raise RemoteSignerError(
-                signer_url,
-                "connection refused (is the signer running? is the host/port correct?)",
-                cause=cause,
-            ) from None
-        if isinstance(cause, URLError):
-            raise RemoteSignerError(
-                signer_url,
-                f"failed to reach signer: {getattr(cause, 'reason', cause)}",
-                cause=cause,
-            ) from None
-        if isinstance(cause, json.JSONDecodeError):
-            raise RemoteSignerError(
-                signer_url,
-                f"signer did not return valid JSON: {cause}",
-                cause=cause,
-            ) from None
-        raise RemoteSignerError(
-            signer_url,
-            f"unexpected error: {cause.__class__.__name__}: {cause}",
-            cause=cause if isinstance(cause, BaseException) else e,
-        ) from None
-
-    return SignerMaterial(address=address, address_hex=address_hex, sig=sig)
-
 
 class OrchestratorClient:
     def __init__(
@@ -888,10 +677,11 @@ class OrchestratorClient:
         *,
         caps: Optional[lp_rpc_pb2.Capabilities] = None,
     ) -> lp_rpc_pb2.OrchestratorInfo:
+        from .orch_info import OrchestratorRpcError
+
         try:
-            signer = _get_signer_material(self.signer_url)
+            signer = get_orch_info_sig(self.signer_url)
         except Exception as e:
-            from .orch_info import OrchestratorRpcError
             raise OrchestratorRpcError(
                 self.orch_url,
                 f"{e.__class__.__name__}: {e}",
@@ -923,17 +713,3 @@ def GetOrchestratorInfo(
     if typ == "lv2v" and model_id:
         effective_caps = build_capabilities(CAPABILITY_LIVE_VIDEO_TO_VIDEO, model_id)
     return OrchestratorClient(orch_url, signer_url=signer_url).GetOrchestratorInfo(caps=effective_caps)
-
-
-# ---------------------------------------------------------------------------
-# Error types kept here for backward compatibility
-# ---------------------------------------------------------------------------
-
-@dataclass
-class OrchestratorRpcError(LivepeerGatewayError):
-    orch_url: str
-    message: str
-    cause: Optional[BaseException] = None
-
-    def __str__(self) -> str:
-        return f"Orchestrator RPC error: {self.message} (orch={self.orch_url})"
