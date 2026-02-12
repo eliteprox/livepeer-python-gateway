@@ -1088,7 +1088,8 @@ class BYOCTokenRefresher:
 
     async def _refresh_token(self) -> None:
         """Refresh the job token by sending it to the orchestrator."""
-        # Check if capability has zero price - skip refresh if so
+        # Fetch fresh job token with sender-specific pricing and ticket params
+        job_token: Optional[BYOCJobToken] = None
         try:
             job_token = GetBYOCJobToken(self._orch_info, self._capability, self._signer_url)
             if job_token.price_per_unit == 0:
@@ -1121,7 +1122,7 @@ class BYOCTokenRefresher:
 
         # Get fresh payment credentials from remote signer for the new token
         # Handle 480 (SessionRefreshRequired) by refreshing orchestrator info and retrying
-        payment_resp = await self._get_payment_with_refresh()
+        payment_resp = await self._get_payment_with_refresh(job_token=job_token)
 
         # Update state from response for next refresh
         if payment_resp.state is not None:
@@ -1137,7 +1138,10 @@ class BYOCTokenRefresher:
 
         self._last_refresh_time = now
 
-    async def _get_payment_with_refresh(self) -> GetPaymentResponse:
+    async def _get_payment_with_refresh(
+        self,
+        job_token: Optional[BYOCJobToken] = None,
+    ) -> GetPaymentResponse:
         """
         Get payment from signer, handling 480 (SessionRefreshRequired) by
         refreshing orchestrator info and retrying.
@@ -1156,6 +1160,7 @@ class BYOCTokenRefresher:
                         self._signer_url,
                         self._orch_info,
                         self._capability,
+                        job_token=job_token,
                         state=self._payment_state,
                         manifest_id=self._capability,
                     )
