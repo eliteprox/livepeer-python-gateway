@@ -1,6 +1,8 @@
 from .capabilities import CapabilityId, build_capabilities
 from .channel_reader import ChannelReader, JSONLReader
 from .channel_writer import ChannelWriter, JSONLWriter
+from .byoc import BYOCJob, BYOCJobRequest, start_byoc_job
+from .byoc_payments import BYOCPaymentSession
 from .control import Control, ControlConfig, ControlMode
 from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, PaymentError
 from .events import Events
@@ -29,6 +31,9 @@ __all__ = [
     "ChannelWriter",
     "CapabilityId",
     "build_capabilities",
+    "BYOCJob",
+    "BYOCJobRequest",
+    "BYOCPaymentSession",
     "discover_orchestrators",
     "get_orch_info",
     "LiveVideoToVideo",
@@ -50,6 +55,7 @@ __all__ = [
     "orchestrator_selector",
     "StartJobRequest",
     "start_lv2v",
+    "start_byoc_job",
     "TricklePublishError",
     "TricklePublisher",
     "TricklePublisherTerminalError",
