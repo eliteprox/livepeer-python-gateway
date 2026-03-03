@@ -1,4 +1,6 @@
 from .capabilities import CapabilityId, build_capabilities
+from .byoc import BYOCJob, BYOCJobRequest, start_byoc_job
+from .byoc_payments import BYOCPaymentSession
 from .control import Control
 from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, PaymentError
 from .events import Events
@@ -19,6 +21,9 @@ __all__ = [
     "Control",
     "CapabilityId",
     "build_capabilities",
+    "BYOCJob",
+    "BYOCJobRequest",
+    "BYOCPaymentSession",
     "discover_orchestrators",
     "get_orch_info",
     "LiveVideoToVideo",
@@ -37,6 +42,7 @@ __all__ = [
     "orchestrator_selector",
     "StartJobRequest",
     "start_lv2v",
+    "start_byoc_job",
     "TricklePublisher",
     "SegmentReader",
     "TrickleSubscriber",
