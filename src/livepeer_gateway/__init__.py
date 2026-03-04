@@ -1,5 +1,5 @@
 from .capabilities import CapabilityId, build_capabilities
-from .control import Control
+from .control import Control, ControlConfig, ControlMode, TimeControl
 from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, PaymentError
 from .events import Events
 from .media_publish import MediaPublish, MediaPublishConfig
@@ -17,6 +17,8 @@ from .trickle_subscriber import TrickleSubscriber
 
 __all__ = [
     "Control",
+    "ControlConfig",
+    "ControlMode",
     "CapabilityId",
     "build_capabilities",
     "discover_orchestrators",
@@ -40,6 +42,7 @@ __all__ = [
     "TricklePublisher",
     "SegmentReader",
     "TrickleSubscriber",
+    "TimeControl",
     "VideoDecodedMediaFrame",
 ]
 

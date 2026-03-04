@@ -11,7 +11,7 @@ from typing import Any, Optional, Sequence
 
 from . import lp_rpc_pb2
 from .capabilities import CapabilityId, build_capabilities
-from .control import Control
+from .control import Control, ControlConfig, ControlMode, TimeControl
 from .errors import (
     LivepeerGatewayError,
     NoOrchestratorAvailableError,
@@ -102,7 +102,7 @@ class LiveVideoToVideo:
     control_url: Optional[str] = None
     events_url: Optional[str] = None
     orchestrator_info: Optional[lp_rpc_pb2.OrchestratorInfo] = None
-    control: Optional[Control] = None
+    control: Optional[Control | TimeControl] = None
     events: Optional[Events] = None
     _media: Optional[MediaPublish] = field(default=None, repr=False, compare=False)
     _payment_session: Optional["PaymentSession"] = field(default=None, repr=False, compare=False)
@@ -114,9 +114,16 @@ class LiveVideoToVideo:
         *,
         orchestrator_info: Optional[lp_rpc_pb2.OrchestratorInfo] = None,
         payment_session: Optional["PaymentSession"] = None,
+        control_config: Optional[ControlConfig] = None,
     ) -> "LiveVideoToVideo":
         control_url = data.get("control_url") if isinstance(data.get("control_url"), str) else None
-        control = Control(control_url) if control_url else None
+        control = None
+        if control_url:
+            config = control_config or ControlConfig()
+            if config.mode == ControlMode.TIME:
+                control = TimeControl(control_url, segment_interval=config.segment_interval)
+            else:
+                control = Control(control_url)
         publish_url = data.get("publish_url") if isinstance(data.get("publish_url"), str) else None
         events_url = data.get("events_url") if isinstance(data.get("events_url"), str) else None
         events = Events(events_url) if events_url else None
@@ -296,6 +303,7 @@ def start_lv2v(
     signer_headers: Optional[dict[str, str]] = None,
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
+    control_config: Optional[ControlConfig] = None,
 ) -> LiveVideoToVideo:
     """
     Start a live video-to-video job.
@@ -316,6 +324,12 @@ def start_lv2v(
     2) explicit ``discovery_url`` argument
     3) token ``discovery`` value
     4) remote signer discovery endpoint derived from the resolved signer URL
+
+    Control channel publishing behavior can be selected via ``control_config``:
+    - ``ControlMode.MESSAGE`` (default): one JSON message per trickle segment.
+    - ``ControlMode.TIME``: newline-delimited JSON (JSONL) within time-rotated
+      segments every ``segment_interval`` seconds (default 10s). Note that each
+      side of the LV2V job should be using the same control mode.
     """
     if not req.model_id:
         raise LivepeerGatewayError("start_lv2v requires model_id")
@@ -383,6 +397,7 @@ def start_lv2v(
                 data,
                 orchestrator_info=info,
                 payment_session=session,
+                control_config=control_config,
             )
             if not job.manifest_id:
                 raise LivepeerGatewayError("LiveVideoToVideo response missing manifest_id")
