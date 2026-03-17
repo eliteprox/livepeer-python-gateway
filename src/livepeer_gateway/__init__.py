@@ -17,7 +17,7 @@ from .oidc_auth import (
     device_login as oidc_device_login,
     refresh as oidc_refresh,
     clear_all_cached_tokens,
-    TokenSet,
+    OAuth2Token,
     OIDCConfig,
 )
 from .orch_info import get_orch_info
@@ -62,6 +62,7 @@ __all__ = [
     "JSONLReader",
     "JSONLWriter",
     "Events",
+    "oidc_device_login",
     "oidc_login",
     "oidc_refresh",
     "PaymentSession",
@@ -70,7 +71,7 @@ __all__ = [
     "StartJobRequest",
     "start_lv2v",
     "start_byoc_job",
-    "TokenSet",
+    "OAuth2Token",
     "TricklePublishError",
     "TricklePublisher",
     "TricklePublisherTerminalError",
