@@ -27,6 +27,7 @@ class RegistryPaymentSession:
         candidate: RegistryRouteCandidate,
         *,
         job_type: str = "registry-session",
+        pipeline: Optional[str] = None,
         signer_headers: Optional[dict[str, str]] = None,
         face_value_wei: Optional[int] = None,
         registry_price_per_unit_wei: Optional[int] = None,
@@ -35,6 +36,9 @@ class RegistryPaymentSession:
         self._signer_url = signer_url
         self._candidate = candidate
         self._job_type = job_type
+        if pipeline is not None and not str(pipeline).strip():
+            raise PaymentError("pipeline must be a non-empty string when set")
+        self._pipeline = str(pipeline).strip() if pipeline is not None else self._candidate.capability_id
         self._signer_headers = signer_headers
         self._face_value_wei = face_value_wei
         self._registry_price_per_unit_wei = registry_price_per_unit_wei
@@ -59,6 +63,7 @@ class RegistryPaymentSession:
             "ticketParamsBaseUrl": ticket_base,
             "capability": self._candidate.capability_id,
             "offering": self._candidate.offering_id,
+            "pipeline": self._pipeline,
             "type": self._job_type,
         }
         if self._manifest_id is not None:

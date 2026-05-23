@@ -118,3 +118,12 @@ Selection/discovery precedence (highest -> lowest):
 5) signer-derived discovery endpoint
 
 `signer_headers` are sent with requests to the signer service. `discovery_headers` are only used when an explicit `discovery_url` is provided (and not when using the signer service as a discovery fallback).
+
+## Remote signing with PymtHouse
+
+When the signer URL points at PymtHouse (`/api/v1/signer/*`), use:
+
+- **`PaymentSession`** — live payments with a base64 **orchestrator** blob (legacy go-livepeer path, or LPNM orchestrator path depending on app `signing_mode`).
+- **`RegistryPaymentSession`** — `paymentMode: "registry"` for capability/offering-based tickets (LPNM payer-daemon).
+
+Apps in **`dual`** mode route registry sessions to LPNM and orchestrator blobs to the legacy remote signer. See [docs/signing-envelopes.md](docs/signing-envelopes.md).

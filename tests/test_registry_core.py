@@ -21,6 +21,7 @@ from livepeer_gateway.registry_mode_plugins import (
     registry_dispatch_cap,
 )
 from livepeer_gateway.registry_parser import (
+    fetch_coordinator_registry,
     flatten_manifest_to_candidates,
     parse_coordinator_signed_manifest_bytes,
 )
@@ -97,6 +98,79 @@ class RegistryParseSelectTests(unittest.TestCase):
             max_price_per_unit_wei=600,
         )
         self.assertEqual(len(ok), 1)
+
+
+class RegistryFetchTests(unittest.TestCase):
+    def test_fetch_direct_base_url_uses_well_known(self) -> None:
+        registry_doc = _minimal_registry_doc()
+        expected_url = "https://coordinator.example/.well-known/livepeer-registry.json"
+        with patch("livepeer_gateway.registry_parser.httpx.Client") as client_cls:
+            client = MagicMock()
+            client_cls.return_value.__enter__.return_value = client
+            client.get.return_value = httpx.Response(
+                200,
+                content=registry_doc,
+                request=httpx.Request("GET", expected_url),
+            )
+            signed = fetch_coordinator_registry("https://coordinator.example")
+        self.assertEqual(signed.manifest.publication_seq, 1)
+        client.get.assert_called_once_with(expected_url, headers=None)
+
+    def test_fetch_discovery_capabilities_falls_back_to_default_coordinator(self) -> None:
+        registry_doc = _minimal_registry_doc()
+        discovery_url = "https://discovery.example/v1/discovery/capabilities"
+        same_origin_url = "https://discovery.example/.well-known/livepeer-registry.json"
+        default_fallback_url = "https://coordinator.xodeapp.xyz/.well-known/livepeer-registry.json"
+        with patch.dict("os.environ", {}, clear=False):
+            with patch("livepeer_gateway.registry_parser.httpx.Client") as client_cls:
+                client = MagicMock()
+                client_cls.return_value.__enter__.return_value = client
+                client.get.side_effect = [
+                    httpx.Response(
+                        404,
+                        request=httpx.Request("GET", same_origin_url),
+                    ),
+                    httpx.Response(
+                        200,
+                        content=registry_doc,
+                        request=httpx.Request("GET", default_fallback_url),
+                    ),
+                ]
+                signed = fetch_coordinator_registry(discovery_url)
+        self.assertEqual(signed.manifest.publication_seq, 1)
+        self.assertEqual(client.get.call_count, 2)
+        self.assertEqual(
+            [c.args[0] for c in client.get.call_args_list],
+            [same_origin_url, default_fallback_url],
+        )
+
+    def test_fetch_discovery_capabilities_honors_env_fallback_override(self) -> None:
+        registry_doc = _minimal_registry_doc()
+        discovery_url = "https://discovery.example/v1/discovery/capabilities"
+        same_origin_url = "https://discovery.example/.well-known/livepeer-registry.json"
+        env_fallback_url = "https://registry-alt.example/.well-known/livepeer-registry.json"
+        with patch.dict("os.environ", {"REGISTRY_COORDINATOR_BASE_URL": "https://registry-alt.example"}):
+            with patch("livepeer_gateway.registry_parser.httpx.Client") as client_cls:
+                client = MagicMock()
+                client_cls.return_value.__enter__.return_value = client
+                client.get.side_effect = [
+                    httpx.Response(
+                        404,
+                        request=httpx.Request("GET", same_origin_url),
+                    ),
+                    httpx.Response(
+                        200,
+                        content=registry_doc,
+                        request=httpx.Request("GET", env_fallback_url),
+                    ),
+                ]
+                signed = fetch_coordinator_registry(discovery_url)
+        self.assertEqual(signed.manifest.publication_seq, 1)
+        self.assertEqual(client.get.call_count, 2)
+        self.assertEqual(
+            [c.args[0] for c in client.get.call_args_list],
+            [same_origin_url, env_fallback_url],
+        )
 
 
 class BrokerHeaderTests(unittest.TestCase):
@@ -181,10 +255,11 @@ class RegistryDispatchWireTests(unittest.TestCase):
                 )
         self.assertIs(out, broker_resp)
         self.assertEqual(pj.call_count, 1)
-        args, kwargs = pj.call_args
+        args, _ = pj.call_args
         payload = args[1]
         self.assertEqual(payload.get("paymentMode"), "registry")
         self.assertEqual(payload.get("ticketParamsBaseUrl"), "https://ai-rig-worker.example.com")
+        self.assertEqual(payload.get("pipeline"), "daydream:scope:v1")
         self.assertEqual(payload.get("faceValueWei"), "99")
         self.assertEqual(pc.call_count, 1)
 

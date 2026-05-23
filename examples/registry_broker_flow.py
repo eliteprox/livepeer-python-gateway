@@ -33,8 +33,11 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--registry-url",
-        default=os.environ.get("REGISTRY_URL", "https://coordinator.xodeapp.xyz").strip(),
-        help="Coordinator base URL or full /.well-known/livepeer-registry.json URL.",
+        default=os.environ.get("REGISTRY_URL", "").strip() or "https://coordinator.xodeapp.xyz",
+        help=(
+            "Coordinator base URL, full /.well-known/livepeer-registry.json URL, "
+            "or discovery capabilities URL (/v1/discovery/capabilities)."
+        ),
     )
     p.add_argument(
         "--signer",
@@ -76,6 +79,14 @@ def _parse_args() -> argparse.Namespace:
         "--offering-id",
         default=os.environ.get("OFFERING_ID", "").strip() or None,
         help="Filter registry candidates by offering_id.",
+    )
+    p.add_argument(
+        "--pipeline",
+        default=os.environ.get("PIPELINE", "").strip() or None,
+        help=(
+            "Signer pipeline hint for generate-live-payment. "
+            "Defaults to selected capability_id when omitted."
+        ),
     )
     p.add_argument(
         "--interaction-mode",
@@ -216,6 +227,7 @@ def main() -> int:
     resp = registry_dispatch_cap(
         signer_url=signer_url,
         candidate=candidate,
+        pipeline=args.pipeline,
         signer_headers=signer_headers,
         face_value_wei=face if face > 0 else None,
         registry_price_per_unit_wei=None if face > 0 else price,

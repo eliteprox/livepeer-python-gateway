@@ -148,6 +148,7 @@ def registry_dispatch_cap(
     *,
     signer_url: str,
     candidate: RegistryRouteCandidate,
+    pipeline: Optional[str] = None,
     signer_headers: Optional[dict[str, str]] = None,
     face_value_wei: Optional[int] = None,
     registry_price_per_unit_wei: Optional[int] = None,
@@ -167,6 +168,7 @@ def registry_dispatch_cap(
     ps = RegistryPaymentSession(
         signer_url,
         candidate,
+        pipeline=pipeline,
         signer_headers=signer_headers,
         face_value_wei=face_value_wei,
         registry_price_per_unit_wei=registry_price_per_unit_wei,

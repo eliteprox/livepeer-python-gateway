@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Mapping
 from urllib.parse import urljoin, urlparse
@@ -21,6 +22,8 @@ from .registry_types import (
 )
 
 _HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_DISCOVERY_CAPABILITIES_PATH = "/v1/discovery/capabilities"
+_DEFAULT_REGISTRY_COORDINATOR_BASE_URL = "https://coordinator.xodeapp.xyz"
 
 
 def _require_str(obj: Mapping[str, Any], key: str) -> str:
@@ -171,20 +174,64 @@ def registry_well_known_url(base_url: str) -> str:
     return urljoin(base.rstrip("/") + "/", ".well-known/livepeer-registry.json")
 
 
+def _is_discovery_capabilities_url(url: str) -> bool:
+    p = urlparse(url)
+    return p.path.rstrip("/").lower() == _DISCOVERY_CAPABILITIES_PATH
+
+
+def _registry_candidate_urls(base_or_well_known_url: str) -> tuple[str, ...]:
+    source = base_or_well_known_url.strip()
+    if not source:
+        raise LivepeerGatewayError("registry base URL is empty")
+
+    if not _is_discovery_capabilities_url(source):
+        return (registry_well_known_url(source),)
+
+    parsed = urlparse(source)
+    if not parsed.scheme or not parsed.netloc:
+        raise LivepeerGatewayError(f"invalid discovery capabilities URL: {source!r}")
+
+    out: list[str] = [registry_well_known_url(f"{parsed.scheme}://{parsed.netloc}")]
+    fallback_base = (
+        os.environ.get("REGISTRY_COORDINATOR_BASE_URL", "").strip()
+        or _DEFAULT_REGISTRY_COORDINATOR_BASE_URL
+    )
+    fallback_url = registry_well_known_url(fallback_base)
+    if fallback_url not in out:
+        out.append(fallback_url)
+    return tuple(out)
+
+
 def fetch_coordinator_registry(
     base_or_well_known_url: str,
     *,
     timeout_s: float = 30.0,
     headers: dict[str, str] | None = None,
 ) -> CoordinatorSignedManifest:
-    url = registry_well_known_url(base_or_well_known_url)
-    try:
-        with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-            r = client.get(url, headers=headers)
-    except httpx.RequestError as e:
-        raise LivepeerGatewayError(f"registry fetch failed: {e}") from e
-    if r.status_code != 200:
-        raise LivepeerGatewayError(
-            f"registry fetch HTTP {r.status_code} from {url!r}",
+    urls = _registry_candidate_urls(base_or_well_known_url)
+    failures: list[str] = []
+    with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+        for url in urls:
+            try:
+                r = client.get(url, headers=headers)
+            except httpx.RequestError as e:
+                failures.append(f"{url!r}: request failed ({e})")
+                continue
+            if r.status_code != 200:
+                failures.append(f"{url!r}: HTTP {r.status_code}")
+                continue
+            try:
+                return parse_coordinator_signed_manifest_bytes(r.content)
+            except LivepeerGatewayError as e:
+                failures.append(f"{url!r}: invalid registry payload ({e})")
+
+    hint = ""
+    if _is_discovery_capabilities_url(base_or_well_known_url):
+        hint = (
+            " Set REGISTRY_COORDINATOR_BASE_URL to override the fallback "
+            "coordinator registry origin."
         )
-    return parse_coordinator_signed_manifest_bytes(r.content)
+    raise LivepeerGatewayError(
+        f"registry fetch failed for {base_or_well_known_url!r}; "
+        f"tried {', '.join(failures)}.{hint}"
+    )
