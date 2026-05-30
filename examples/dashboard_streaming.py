@@ -5,7 +5,7 @@ Requires:
   uv sync
   uv sync --extra examples   # for camera_capture-style media publishing
 
-Environment defaults match local signer/docker-compose:
+Environment defaults match local lpclearinghouse docker compose:
   Dashboard:      http://localhost:3001
   OIDC issuer:    http://127.0.0.1:8080/realms/clearinghouse
   Signer (DMZ):   http://127.0.0.1:8080
