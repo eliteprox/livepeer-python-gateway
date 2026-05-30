@@ -15,6 +15,8 @@ _LOG = logging.getLogger(__name__)
 
 FilterValue = str | Sequence[str]
 _RUNNER_DISCOVERY_BATCH_SIZE = 5
+# NaaP / multi-tenant discovery can take 15–30s; keep above typical gateway defaults.
+DEFAULT_DISCOVERY_TIMEOUT = 60.0
 
 
 def _normalize_filter_values(value: Optional[FilterValue]) -> list[str]:
@@ -69,6 +71,7 @@ def discover_orchestrators(
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
     capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
+    timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
 ) -> list[str]:
     """
     Discover orchestrators and return a list of addresses.
@@ -95,7 +98,7 @@ def discover_orchestrators(
 
     if discovery_url:
         discovery_endpoint = _parse_http_url(discovery_url).geturl()
-        request_headers = discovery_headers
+        request_headers = discovery_headers if discovery_headers is not None else signer_headers
     elif signer_url:
         discovery_endpoint = f"{_http_origin(signer_url)}/discover-orchestrators"
         request_headers = signer_headers
@@ -107,8 +110,12 @@ def discover_orchestrators(
         discovery_endpoint = _append_caps(discovery_endpoint, capabilities)
 
     try:
-        _LOG.debug("discover_orchestrators running discovery: %s", discovery_endpoint)
-        data = get_json_sync(discovery_endpoint, headers=request_headers)
+        _LOG.debug(
+            "discover_orchestrators running discovery: %s (timeout=%ss)",
+            discovery_endpoint,
+            timeout,
+        )
+        data = get_json_sync(discovery_endpoint, headers=request_headers, timeout=timeout)
     except LivepeerGatewayError as e:
         _LOG.debug("discover_orchestrators discovery failed: %s", e)
         raise RemoteSignerError(
@@ -150,6 +157,7 @@ async def discover_runners(
     discovery_headers: Optional[dict[str, str]] = None,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
+    timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
 ) -> list[dict[str, Any]]:
     """
     Discover live runners and return discovery entries.
@@ -160,7 +168,7 @@ async def discover_runners(
     """
     if discovery_url:
         discovery_endpoint = _parse_http_url(discovery_url).geturl()
-        request_headers = discovery_headers
+        request_headers = discovery_headers if discovery_headers is not None else signer_headers
     elif signer_url:
         discovery_endpoint = f"{_http_origin(signer_url)}/discover-orchestrators"
         request_headers = signer_headers
@@ -173,8 +181,12 @@ async def discover_runners(
     discovery_endpoint = _append_runner_filters(discovery_endpoint, app=app_filters, gpu=gpu_filters)
 
     try:
-        _LOG.debug("discover_runners running discovery: %s", discovery_endpoint)
-        data = await get_json(discovery_endpoint, headers=request_headers)
+        _LOG.debug(
+            "discover_runners running discovery: %s (timeout=%ss)",
+            discovery_endpoint,
+            timeout,
+        )
+        data = await get_json(discovery_endpoint, headers=request_headers, timeout=timeout)
     except LivepeerGatewayError as e:
         _LOG.debug("discover_runners discovery failed: %s", e)
         raise RemoteSignerError(

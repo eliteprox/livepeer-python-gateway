@@ -6,6 +6,7 @@ from typing import Any, Optional, Sequence, Tuple
 
 from . import lp_rpc_pb2
 from .discovery import (
+    DEFAULT_DISCOVERY_TIMEOUT,
     FilterValue,
     discover_orchestrator_runners,
     discover_orchestrators,
@@ -126,7 +127,11 @@ def orchestrator_selector(
     discovery_headers: Optional[dict[str, str]] = None,
     capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
     use_tofu: bool = True,
+    discovery_timeout: float | None = None,
 ) -> SelectionCursor:
+    resolved_discovery_timeout = (
+        DEFAULT_DISCOVERY_TIMEOUT if discovery_timeout is None else discovery_timeout
+    )
     orch_list = discover_orchestrators(
         orchestrators,
         signer_url=signer_url,
@@ -134,6 +139,7 @@ def orchestrator_selector(
         discovery_url=discovery_url,
         discovery_headers=discovery_headers,
         capabilities=capabilities,
+        timeout=resolved_discovery_timeout,
     )
 
     if not orch_list:

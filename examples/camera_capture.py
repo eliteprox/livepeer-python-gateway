@@ -55,6 +55,30 @@ def _parse_args() -> argparse.Namespace:
         help="Remote signer URL (no path). If omitted, runs in offchain mode.",
     )
     p.add_argument(
+        "--billing-url",
+        default=None,
+        help=(
+            "Dashboard origin for OIDC device exchange "
+            "(e.g. http://localhost:3001). With --issuer-url, enables facade auth."
+        ),
+    )
+    p.add_argument(
+        "--issuer-url",
+        default=None,
+        help="Clearinghouse OIDC issuer URL for device login.",
+    )
+    p.add_argument(
+        "--client-id",
+        default=None,
+        dest="client_id",
+        help="Public OIDC app client id (app_*).",
+    )
+    p.add_argument(
+        "--discovery-url",
+        default=None,
+        help="Discovery URL override (defaults to signer /discover-orchestrators?cap=MODEL).",
+    )
+    p.add_argument(
         "--model",
         default=DEFAULT_MODEL_ID,
         help=f"Pipeline model to start via /live-video-to-video. Default: {DEFAULT_MODEL_ID}",
@@ -182,10 +206,21 @@ async def main() -> None:
     output_task: asyncio.Task[None] | None = None
 
     try:
+        discovery_url = args.discovery_url
+        if discovery_url is None and args.signer:
+            discovery_url = (
+                f"{args.signer.rstrip('/')}/discover-orchestrators"
+                f"?cap={args.model}"
+            )
+
         job = start_lv2v(
             args.orchestrator,
             StartJobRequest(model_id=args.model),
             signer_url=args.signer,
+            billing_url=args.billing_url,
+            issuer_url=args.issuer_url,
+            oidc_client_id=args.client_id,
+            discovery_url=discovery_url,
         )
 
         print("=== LiveVideoToVideo ===")

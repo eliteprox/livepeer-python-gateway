@@ -42,6 +42,28 @@ Capture MacOS camera frames and publish via write_frame
 uv run examples/camera_capture.py localhost:8935
 ```
 
+Stream via Dashboard facade (OIDC device login + signer exchange)
+```
+# Minimal smoke test (edit constants in the file or use VS Code launch config)
+uv run examples/dashboard_streaming_quick.py
+
+# Dashboard on :3001, clearinghouse DMZ on :8080, public app client app_demo
+uv run examples/dashboard_streaming.py \
+  --billing-url http://localhost:3001 \
+  --issuer-url http://127.0.0.1:8080/realms/clearinghouse \
+  --signer-url http://127.0.0.1:8080 \
+  --client-id app_demo \
+  --model streamdiffusion-sdxl-v2v
+
+# camera_capture.py accepts the same facade flags
+uv run examples/camera_capture.py \
+  --billing-url http://localhost:3001 \
+  --issuer-url http://127.0.0.1:8080/realms/clearinghouse \
+  --signer-url http://127.0.0.1:8080 \
+  --client-id app_demo \
+  --model streamdiffusion-sdxl-v2v
+```
+
 Capture MacOS camera frames and subscribe to media output (stdout or file)
 ```
 uv run examples/camera_capture.py localhost:8935 --output - | ffplay -fflags nobuffer -flags low_delay -probesize 32 -i -

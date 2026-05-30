@@ -1,0 +1,440 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: dashboard streaming (local facade)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/dashboard_streaming_quick.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--discovery-url",
+                "https://naap-api.cloudspe.com/v1/discover/orchestrators",
+                "--billing-url",
+                "http://localhost:3001",
+                "--issuer-url",
+                "https://localhost:8080/realms/clearinghouse",
+                "--signer-url",
+                "https://localhost:8080",
+                "--client-id",
+                "app_demo",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--duration",
+                "900"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_ALLOW_INSECURE_TLS": "1"
+            },
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: write_frames (uv)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--discovery-url",
+                "https://naap-api.cloudspe.com/v1/discover/orchestrators",
+                "--billing-url",
+                "http://localhost:3001",
+                "--issuer-url",
+                "https://localhost:8080/realms/clearinghouse",
+                "--client-id",
+                "app_demo",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000",
+                "--debug"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_ALLOW_INSECURE_TLS": "1"
+            },
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+   
+        {
+            "name": "Python: get_orchestrator_info",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/get_orchestrator_info.py",
+            "console": "integratedTerminal",
+            "args": [
+                // "https://hky.eliteencoder.net:8936",
+                // "https://hky-2.eliteencoder.net:8937",
+                "https://orch-staging-1.daydream.monster:8935",
+                "--signer",
+                // "http://10.10.7.61:8081",
+                "https://signer.eliteencoder.net",
+            ],
+            "env": {
+                "ALLOW_HTTP_SIGNER": "1",
+                // "LIVEPEER_REMOTE_SIGNER_JWT": "${env:LIVEPEER_REMOTE_SIGNER_JWT}"
+            },
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: write_frames (dashboard)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--discovery-url",
+                "https://naap-api.cloudspe.com/v1/discover/orchestrators",
+                "--billing-url",
+                "http://localhost:3001",
+                "--issuer-url",
+                "https://localhost:8080/realms/clearinghouse",
+                "--signer",
+                "https://localhost:8080",
+                "--client-id",
+                "app_demo",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_ALLOW_INSECURE_TLS": "1"
+            },
+            "console": "integratedTerminal",
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: write_frames (Daydream signer)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                // "https://hky.eliteencoder.net:8936",
+                "--signer",
+                "https://signer.daydream.live",
+                "--model",
+                "scope",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+                "DAYDREAM_API_KEY": "sk_qpJQh77pPaamREfSrLYiQkgiA1Pyq9eMhHfGznKD5FRv22m4DbQy5wGetNrtV3Ro"
+            },
+            "console": "integratedTerminal",
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: write_frames (local orch)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                // "https://hky.eliteencoder.net:8936",
+                "https://10.10.7.61:8936",
+                "--signer",
+                "http://10.10.7.61:8081",
+                // "https://signer.eliteencoder.net",
+                "--model",
+                "noop",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: stream_video_file",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/stream_video_file.py",
+            "args": [
+                // "https://ai.eliteencoder.net:8936",
+                "https://10.10.7.61:8936",
+                "--signer",
+                // "http://10.10.7.61:8081",
+                "https://signer.eliteencoder.net",
+                "--capability",
+                "comfystream",
+                "--workflow",
+                // "/home/elite/repos/scope/docs/inverted-color-api.json",
+                "/home/elite/repos/comfystream/workflows/comfystream/audio-transcription-api.json",
+                // "/home/elite/repos/comfystream/workflows/comfystream/depth-anything-v2-trt-example-api.json",
+                "--input",
+                "${env:HOME}/audio_only.mp4",
+                // "${env:HOME}/20260205_Thu_Alex.mp3",
+                // "--record",
+                // "${env:HOME}/test_comfystream_output.mp4",
+                // "--fps",
+                // "30.0",
+                "--enable-data-output",
+                // "--loop",
+            ],
+            "env": {
+                "ALLOW_HTTP_SIGNER": "1",
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_REMOTE_SIGNER_JWT": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImxpdmVwZWVyLWtleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJsaXZlcGVlci1qd3QtaXNzdWVyIiwic3ViIjoiMHhhQ0M1YjBiZWVDNzE0RWRhZUFmNjZhMzc1ODY1NERjNjhmMTM3RTNhIiwiYXVkIjpbImxpdmVwZWVyLXJlbW90ZS1zaWduZXIiXSwiZXhwIjoxNzcwNzA0NTQ5LCJpYXQiOjE3NzA2NzU3NDksImp0aSI6ImIwNmJkOGU5LTUxNGYtNGM4NC1iZjUyLTFlNGE0NTQ4MzQxYSIsInNjb3BlIjoic2lnbjpvcmNoZXN0cmF0b3Igc2lnbjpwYXltZW50IHNpZ246YnlvYyIsInRpZXIiOiJzdGFuZGFyZCIsIm5hbWUiOiJ0ZXN0aW5nIGtleSJ9.J0Qdz4e6z_CCNUQVPMxgyDzePd3jzd9RHpNJmJRuL24yADkyLv7_eulfiL4SJ-bnMRd8BEFSVMcKnpzlZqy36-oiLEqvMTIZ2fOv-b2FQuARPQOIziinfO3eM2nqiEwHkZr8YJec5GONvv6Hh6qbSyo35EWVWVy4aLFzjlGFSIiyjTwHMmyLLZbeQBhciRL7BLhvFxB5CtgNKc-s6ehgjqfka29_-UImMw1JmzVDixcrqbNzU8p-MsrdGxvqEWX-E7pZru26vAU81rnJJLtVoTBleWcCs5MIT9AonBlS7yH9nKTac98PVBgmQ6vl_v9X4tjKO4-W0TWyYSvn_JY3MUdteyAEuekOEdXJfAqmMi0bvBItJyzi4b5BHpRiM3W5F4oU7fBKfaTYNsn3d8FXTS7Xm7fOVuu4_CK184RNTiPK7I0BYlmTc2uaTS5myRNte62CYsSBqaja8S0W15oqSu13MXA67mEeUonAeNwfmOoTVjHwmKrUdKEHw6sgaesq-mqkrqrRXrVbGAei_prWgyJlcdSyG0KvCYgsq-x1E4aKVLYjX3OtRZY3g-xveXDJSugswbcL9cKiNriZuxnouVYs489y15eZWvuOemSjq8l51qeAVMNiqolTFfmakswT958AXIPAQlyP19UaPIjwEgww9PqQ0CSUG8-RJEhHbKw"
+            },
+            "python": "${command:python.interpreterPath}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+
+        {
+            "name": "Python: byoc_write_frames (billing)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/byoc_write_frames.py",
+            "args": [
+                "--billing-url",
+                "http://localhost:3000",
+                "--capability",
+                "comfystream",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "streaming_demo (pymthouse.com)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/livepeer_gateway/demo-app/streaming_demo_server.py",
+            "args": [
+                "--model",
+                "noop",
+                "--port",
+                "8080",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "write_frames (pymthouse.com)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                // "https://hky.eliteencoder.net:8936",
+                "https://ai.eliteencoder.net:8936",
+                // "https://10.10.7.61:8935",
+                "--billing-url",
+                "https://pymthouse.com",
+                "--client-id",
+                "app_3ee9ae159ea7ad4c03b52849",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "write_frames (local)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--billing-url",
+                "http://localhost:3001",
+                "--client-id",
+                "app_fcdc66b7a7b21bae1688c36b",
+                "--model",
+                "noop",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: write_frames (pymthouse.com browser)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "https://hky.eliteencoder.net:8936",
+                "--billing-url",
+                "https://pymthouse.com",
+                "--client-id",
+                "app_561127a9ac83c8758b25e4fe",
+                "--model",
+                "noop",
+                "--count",
+                "900000",
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG",
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: dashboard streaming (pymthouse.com)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/dashboard_streaming_quick.py",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--billing-url",
+                "https://pymthouse.com",
+                "--issuer-url",
+                "https://pymthouse.com/api/v1/oidc",
+                "--signer-url",
+                "https://pymthouse.com",
+                "--client-id",
+                "app_561127a9ac83c8758b25e4fe",
+                "--model",
+                "streamdiffusion"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: select_orchestrator",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/select_orchestrator.py",
+            "args": [
+                "--signer",
+                "http://10.10.7.61:8081",
+                "--debug"
+            ],
+            "env": {
+                "ALLOW_HTTP_SIGNER": "1"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: discover_orchestrators_example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/discover_orchestrators_example.py",
+            "args": [
+                "--signer",
+                "https://byoc-staging-1.daydream.monster",
+            ],
+            "env": {
+                "ALLOW_HTTP_SIGNER": "1",
+                "DAYDREAM_API_KEY": "sk_Y63xgTgXZusAWSUCG911YsStpPZrNBs2XhPAYkXixenEW7LzQ47DwKP3uWDaVoyH",
+                // "LIVEPEER_API_KEY": "${env:LIVEPEER_API_KEY}"
+            },
+            "console": "integratedTerminal",
+            "python": "${command:python.interpreterPath}",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: capability_discovery_service (aiServiceRegistry)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/orch_discovery.py",
+            "args": [
+                "--service-registry-addr",
+                "0xC92d3A360b8f9e083bA64DE15d95Cf8180897431",
+                "--eth-rpc",
+                "http://arb.eliteencoder.net:3517",
+                "--port",
+                "9876"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "${command:python.interpreterPath}",
+        },
+        {
+            "name": "Python: logout (PymtHouse)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/logout.py",
+            "args": [
+                "--billing-url",
+                "https://pymthouse.com",
+                "--client-id",
+                "app_3ee9ae159ea7ad4c03b52849",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: logout (local)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/logout.py",
+            "args": [
+                "--billing-url",
+                "http://p:3001",
+                "--client-id",
+                "app_fcdc66b7a7b21bae1688c36b",
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: run_session",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder:livepeer-python-gateway}/examples/run_session.py",
+            "python": "${workspaceFolder:livepeer-python-gateway}/.venv/bin/python",
+            "args": [
+                // "https://ai.eliteencoder.net:8936",
+                "https://10.10.7.61:8936",
+                "--signer",
+                "http://10.10.7.61:8081",
+                // "https://signer.eliteencoder.net",
+                // "--model-id",
+                // "noop",
+                "--capability",
+                "comfystream",
+                "--input",
+                "${env:HOME}/testlong.mp4",
+                "--fps",
+                "30.0",
+                "--keyframe-interval",
+                "2.0",
+                "--record-output",
+                "${env:HOME}/test_recordinglong.ts"
+            ],
+            "env": {
+                "ALLOW_HTTP_SIGNER": "1",
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_REMOTE_SIGNER_JWT": "${env:LIVEPEER_REMOTE_SIGNER_JWT}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from . import lp_rpc_pb2
 from .capabilities import CapabilityId, build_capabilities
@@ -27,6 +27,7 @@ from .media_publish import MediaPublish, MediaPublishConfig
 from .http import _http_origin, post_json_sync
 from .selection import orchestrator_selector
 from .remote_signer import PaymentSession
+from .auth_resolve import resolve_signer_auth
 from .token import parse_token
 from .trickle_subscriber import TrickleSubscriber
 
@@ -263,9 +264,17 @@ def start_lv2v(
     signer_headers: Optional[dict[str, str]] = None,
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
+    billing_url: Optional[str] = None,
+    issuer_url: Optional[str] = None,
+    oidc_client_id: Optional[str] = None,
+    oidc_scopes: str = "openid profile sign:job",
+    scope: Optional[str] = "sign:job",
+    headless: bool = True,
+    on_device_auth: Optional[Callable[[str, str, int], None]] = None,
     control_config: Optional[ControlConfig] = None,
     use_tofu: bool = True,
     timeout: float = 5.0,
+    discovery_timeout: float | None = None,
 ) -> LiveVideoToVideo:
     """
     Start a live video-to-video job.
@@ -279,8 +288,14 @@ def start_lv2v(
     payments can be started later via ``job.start_payment_sender()``.
 
     Optional ``token`` can be provided as a base64-encoded JSON object.
-    Token values take precedence over explicit keyword arguments.
-    Explicit keyword arguments are used only for fields missing in the token.
+    Token values take precedence over explicit keyword arguments for signer,
+    discovery, and orchestrator fields. For Dashboard facade auth
+    (``billing_url``, ``issuer_url``, ``oidc_client_id``), explicit keyword
+    arguments take precedence over token values.
+
+    When ``billing_url`` and ``issuer_url`` are set (or present in the token)
+    and no signer bearer is supplied, the SDK performs OIDC device login and
+    exchanges the user access token via ``POST {billing_url}/api/signer/device/exchange``.
 
     Orchestrator selection/discovery precedence (highest -> lowest):
     1) token ``orchestrators`` value
@@ -291,7 +306,10 @@ def start_lv2v(
 
     ``timeout`` controls only the initial HTTP POST to
     ``/live-video-to-video`` after an orchestrator has been selected.
-    Discovery and ``GetOrchestrator`` calls use their own timeouts.
+
+    ``discovery_timeout`` controls HTTP discovery (default 60s). NaaP and similar
+    services often respond in 15–30s; the legacy 5s default is too short.
+    ``GetOrchestrator`` uses its own timeout.
 
     ``use_tofu`` controls TLS mode for ``GetOrchestrator``:
     - True: trust-on-first-use certificate pinning
@@ -327,6 +345,39 @@ def start_lv2v(
     if resolved_discovery_headers is None:
         resolved_discovery_headers = discovery_headers
 
+    resolved_billing_url = billing_url
+    if resolved_billing_url is None and token_data:
+        resolved_billing_url = token_data.get("billing")
+    resolved_issuer_url = issuer_url
+    if resolved_issuer_url is None and token_data:
+        resolved_issuer_url = token_data.get("issuer")
+    resolved_oidc_client_id = oidc_client_id
+    if resolved_oidc_client_id is None and token_data:
+        resolved_oidc_client_id = token_data.get("oidc_client_id")
+    resolved_oidc_scopes = oidc_scopes
+    if token_data and token_data.get("oidc_scopes"):
+        if oidc_scopes == "openid profile sign:job":
+            resolved_oidc_scopes = token_data["oidc_scopes"]
+
+    (
+        resolved_signer_url,
+        resolved_signer_headers,
+        resolved_discovery_url,
+        resolved_discovery_headers,
+    ) = resolve_signer_auth(
+        billing_url=resolved_billing_url,
+        issuer_url=resolved_issuer_url,
+        signer_url=resolved_signer_url,
+        signer_headers=resolved_signer_headers,
+        discovery_url=resolved_discovery_url,
+        discovery_headers=resolved_discovery_headers,
+        oidc_client_id=resolved_oidc_client_id,
+        oidc_scopes=resolved_oidc_scopes,
+        scope=scope,
+        headless=headless,
+        on_device_auth=on_device_auth,
+    )
+
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
     # Orchestrator discovery precedence after token-first field resolution:
     # token orchestrators -> explicit orch_url -> token discovery ->
@@ -339,6 +390,7 @@ def start_lv2v(
         discovery_headers=resolved_discovery_headers,
         capabilities=capabilities,
         use_tofu=use_tofu,
+        discovery_timeout=discovery_timeout,
     )
 
     start_rejections: list[OrchestratorRejection] = []

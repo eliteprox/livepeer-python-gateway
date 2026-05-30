@@ -31,12 +31,32 @@ class RunnerRejection:
     reason: str
 
 
+def _format_rejections(
+    message: str,
+    rejections: list[OrchestratorRejection] | list[RunnerRejection],
+    *,
+    max_lines: int = 8,
+) -> str:
+    if not rejections:
+        return message
+    lines = [message, "Rejections:"]
+    for rejection in rejections[:max_lines]:
+        lines.append(f"  - {rejection.url}: {rejection.reason}")
+    remaining = len(rejections) - max_lines
+    if remaining > 0:
+        lines.append(f"  ... and {remaining} more")
+    return "\n".join(lines)
+
+
 class NoOrchestratorAvailableError(LivepeerGatewayError):
     """Raised when no orchestrator could be selected."""
 
     def __init__(self, message: str, rejections: list[OrchestratorRejection] | None = None) -> None:
         super().__init__(message)
         self.rejections: list[OrchestratorRejection] = rejections or []
+
+    def __str__(self) -> str:
+        return _format_rejections(super().__str__(), self.rejections)
 
 
 class NoRunnerAvailableError(LivepeerGatewayError):
@@ -47,11 +67,7 @@ class NoRunnerAvailableError(LivepeerGatewayError):
         self.rejections: list[RunnerRejection] = rejections or []
 
     def __str__(self) -> str:
-        message = super().__str__()
-        if not self.rejections:
-            return message
-        reasons = "; ".join(f"{r.url}: {r.reason}" for r in self.rejections)
-        return f"{message}: {reasons}"
+        return _format_rejections(super().__str__(), self.rejections)
 
 
 class SignerRefreshRequired(LivepeerGatewayError):
