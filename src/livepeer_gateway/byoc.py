@@ -194,17 +194,25 @@ def _create_byoc_payment(
 
     signer_origin = _http_origin(signer_url)
     payment_url = f"{signer_origin}/generate-live-payment"
-    payment_body = json.dumps({
+    payment_body_dict = {
         "orchestrator": orch_info_b64,
         "type": "lv2v",
         "capability": capability,
-    }).encode("utf-8")
+    }
     payment_headers = {
         "Content-Type": "application/json",
         "Livepeer-Capability": capability,
     }
     if signer_headers:
         payment_headers.update(signer_headers)
+
+    from .signer_identity import enrich_signer_payment_request
+
+    payment_headers, payment_body_dict = enrich_signer_payment_request(
+        payment_headers,
+        payment_body_dict,
+    )
+    payment_body = json.dumps(payment_body_dict).encode("utf-8")
 
     payment_req = Request(payment_url, data=payment_body, headers=payment_headers, method="POST")
     try:

@@ -40,6 +40,14 @@ def _extract_signer_access_token(payload: dict[str, Any]) -> str:
     )
 
 
+def _extract_signer_url(payload: dict[str, Any]) -> Optional[str]:
+    for key in ("signerUrl", "signer_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def exchange_device_token_via_dashboard(
     billing_url: str,
     device_token: str,
@@ -47,12 +55,12 @@ def exchange_device_token_via_dashboard(
     scope: Optional[str] = None,
     client_id: Optional[str] = None,
     timeout: float = 15.0,
-) -> str:
+) -> dict[str, Any]:
     """
-    Exchange an OIDC user/device access token for a long-lived signer JWT.
+    Exchange an OIDC user/device access token for a signer JWT via the facade.
 
-    Calls the Dashboard facade ``POST /api/signer/device/exchange``, which uses
-    server-side M2M credentials to mint the signer token via the clearinghouse.
+    Calls ``POST {billing_url}/api/signer/device/exchange`` and returns the full
+    JSON body (access token, optional ``signerUrl``, balance fields).
     """
     url = f"{billing_url.rstrip('/')}/api/signer/device/exchange"
     body: dict[str, Any] = {"deviceToken": device_token}
@@ -66,7 +74,8 @@ def exchange_device_token_via_dashboard(
         raise LivepeerGatewayError(
             "Dashboard device exchange returned non-object JSON response"
         )
-    return _extract_signer_access_token(data)
+    _extract_signer_access_token(data)
+    return data
 
 
 def resolve_signer_auth(
@@ -82,6 +91,7 @@ def resolve_signer_auth(
     scope: Optional[str] = "sign:job",
     headless: bool = True,
     on_device_auth: Optional[Callable[[str, str, int], None]] = None,
+    clear_token_cache: bool = False,
 ) -> tuple[
     Optional[str],
     Optional[dict[str, str]],
@@ -107,9 +117,16 @@ def resolve_signer_auth(
     if not billing_url or not issuer_url:
         return signer_url, signer_headers, discovery_url, discovery_headers
 
-    from .oidc_auth import DEFAULT_CLIENT_ID, ensure_valid_token
+    from .oidc_auth import DEFAULT_CLIENT_ID, clear_cached_token, ensure_valid_token
 
     client_id = oidc_client_id or DEFAULT_CLIENT_ID
+    if clear_token_cache:
+        clear_cached_token(issuer_url, client_id=client_id, scopes=oidc_scopes)
+        _LOG.info(
+            "Cleared OIDC token cache for %s (client_id=%s)",
+            issuer_url,
+            client_id,
+        )
     _LOG.info("OIDC device login at %s (client_id=%s)", issuer_url, client_id)
     user_tokens = ensure_valid_token(
         issuer_url,
@@ -122,14 +139,15 @@ def resolve_signer_auth(
     if not isinstance(device_access, str) or not device_access.strip():
         raise LivepeerGatewayError("OIDC login did not return an access token")
 
-    signer_access = exchange_device_token_via_dashboard(
+    signer_exchange = exchange_device_token_via_dashboard(
         billing_url,
         device_access,
         scope=scope,
         client_id=client_id,
     )
+    signer_access = _extract_signer_access_token(signer_exchange)
 
-    resolved_signer_url = signer_url
+    resolved_signer_url = signer_url or _extract_signer_url(signer_exchange)
     resolved_headers = {"Authorization": f"Bearer {signer_access}"}
     resolved_discovery_url = discovery_url
     resolved_discovery_headers = _discovery_headers_from_signer(

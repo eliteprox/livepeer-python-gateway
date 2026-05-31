@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livepeer_gateway.auth_resolve import (
+    _extract_signer_access_token,
     exchange_device_token_via_dashboard,
     resolve_signer_auth,
 )
@@ -15,13 +16,15 @@ def test_exchange_device_token_via_dashboard_camel_case() -> None:
     with patch("livepeer_gateway.auth_resolve.post_json_sync") as post_json:
         post_json.return_value = {
             "token": {"accessToken": "signer-jwt", "tokenType": "Bearer"},
+            "signerUrl": "http://127.0.0.1:8080",
         }
-        token = exchange_device_token_via_dashboard(
+        payload = exchange_device_token_via_dashboard(
             "http://localhost:3001",
             "user-device-token",
             scope="sign:job",
         )
-    assert token == "signer-jwt"
+    assert _extract_signer_access_token(payload) == "signer-jwt"
+    assert payload["signerUrl"] == "http://127.0.0.1:8080"
     post_json.assert_called_once()
     url = post_json.call_args[0][0]
     body = post_json.call_args[0][1]
@@ -71,14 +74,15 @@ def test_resolve_signer_auth_runs_oidc_and_exchange() -> None:
         ) as ensure_valid,
         patch(
             "livepeer_gateway.auth_resolve.exchange_device_token_via_dashboard",
-            return_value="signer-access",
+            return_value={
+                "access_token": "signer-access",
+                "signerUrl": "http://127.0.0.1:8080",
+            },
         ) as exchange,
     ):
         signer_url, signer_headers, discovery_url, discovery_headers = resolve_signer_auth(
             billing_url="http://localhost:3001",
-            issuer_url="http://127.0.0.1:8080/realms/clearinghouse",
-            signer_url="http://127.0.0.1:8080",
-            discovery_url="http://127.0.0.1:8080/discover-orchestrators?cap=model",
+            issuer_url="http://localhost:3001/api/v1/oidc",
             oidc_client_id="app_demo",
         )
 
@@ -91,8 +95,38 @@ def test_resolve_signer_auth_runs_oidc_and_exchange() -> None:
     )
     assert signer_url == "http://127.0.0.1:8080"
     assert signer_headers == {"Authorization": "Bearer signer-access"}
-    assert discovery_url == "http://127.0.0.1:8080/discover-orchestrators?cap=model"
-    assert discovery_headers == {"Authorization": "Bearer signer-access"}
+    assert discovery_url is None
+    assert discovery_headers is None
+
+
+def test_resolve_signer_auth_clears_cache_when_requested() -> None:
+    user_tokens = MagicMock()
+    user_tokens.get.return_value = "user-access"
+    with (
+        patch(
+            "livepeer_gateway.oidc_auth.clear_cached_token",
+        ) as clear_cache,
+        patch(
+            "livepeer_gateway.oidc_auth.ensure_valid_token",
+            return_value=user_tokens,
+        ),
+        patch(
+            "livepeer_gateway.auth_resolve.exchange_device_token_via_dashboard",
+            return_value={"access_token": "signer-access"},
+        ),
+    ):
+        resolve_signer_auth(
+            billing_url="http://localhost:3001",
+            issuer_url="http://localhost:3001/api/v1/oidc",
+            oidc_client_id="app_demo",
+            clear_token_cache=True,
+        )
+
+    clear_cache.assert_called_once_with(
+        "http://localhost:3001/api/v1/oidc",
+        client_id="app_demo",
+        scopes="openid profile sign:job",
+    )
 
 
 def test_start_lv2v_explicit_signer_headers_win_over_billing() -> None:

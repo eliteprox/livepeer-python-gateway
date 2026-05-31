@@ -291,8 +291,13 @@ class LivePaymentSession:
         if self._state is not None:
             payload["state"] = self._state
 
-        headers = dict(self._signer_headers) if self._signer_headers else None
-        data = await post_json(url, payload, headers=headers)
+        from .signer_identity import enrich_signer_payment_request
+
+        headers, payload = enrich_signer_payment_request(
+            dict(self._signer_headers) if self._signer_headers else None,
+            payload,
+        )
+        data = await post_json(url, payload, headers=headers or None)
         payment = data.get("payment")
         if not isinstance(payment, str) or not payment:
             raise PaymentError(
@@ -412,7 +417,13 @@ class PaymentSession:
             if self._state is not None:
                 payload["state"] = self._state
 
-            data = post_json(url, payload, headers=self._signer_headers)
+            from .signer_identity import enrich_signer_payment_request
+
+            headers, payload = enrich_signer_payment_request(
+                self._signer_headers,
+                payload,
+            )
+            data = post_json(url, payload, headers=headers or None)
             payment = data.get("payment")
             if not isinstance(payment, str) or not payment:
                 raise PaymentError(

@@ -271,6 +271,7 @@ def start_lv2v(
     scope: Optional[str] = "sign:job",
     headless: bool = True,
     on_device_auth: Optional[Callable[[str, str, int], None]] = None,
+    clear_token_cache: bool = False,
     control_config: Optional[ControlConfig] = None,
     use_tofu: bool = True,
     timeout: float = 5.0,
@@ -376,6 +377,7 @@ def start_lv2v(
         scope=scope,
         headless=headless,
         on_device_auth=on_device_auth,
+        clear_token_cache=clear_token_cache,
     )
 
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
