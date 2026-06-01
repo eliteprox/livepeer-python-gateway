@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Optional, Sequence
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
@@ -17,6 +18,101 @@ FilterValue = str | Sequence[str]
 _RUNNER_DISCOVERY_BATCH_SIZE = 5
 # NaaP / multi-tenant discovery can take 15–30s; keep above typical gateway defaults.
 DEFAULT_DISCOVERY_TIMEOUT = 60.0
+DISCOVERY_SERVICE_RAW_PATH = "/v1/discovery/raw"
+DEFAULT_DISCOVERY_SERVICE_TYPE = "legacy"
+
+
+def read_discovery_service_url() -> Optional[str]:
+    """Base URL for the materialized Discovery Service (Railway / self-hosted)."""
+    raw = os.environ.get("LIVEPEER_DISCOVERY_SERVICE_URL", "").strip()
+    return raw or None
+
+
+def discovery_service_type() -> str:
+    return os.environ.get("LIVEPEER_DISCOVERY_SERVICE_TYPE", DEFAULT_DISCOVERY_SERVICE_TYPE).strip() or DEFAULT_DISCOVERY_SERVICE_TYPE
+
+
+def discovery_service_capability_name(cap: str) -> str:
+    """
+    Map gateway ``pipeline/model`` caps to Discovery Service capability keys.
+
+    The materialized dataset indexes models such as ``streamdiffusion-sdxl``,
+    not ``live-video-to-video/streamdiffusion-sdxl``.
+    """
+    value = cap.strip()
+    if not value:
+        return value
+    if "/" in value:
+        return value.rsplit("/", 1)[-1]
+    return value
+
+
+def is_discovery_service_endpoint(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    if path.endswith(DISCOVERY_SERVICE_RAW_PATH):
+        return True
+    base = read_discovery_service_url()
+    if base:
+        base_parsed = urlparse(base.rstrip("/"))
+        if parsed.netloc == base_parsed.netloc and parsed.scheme == base_parsed.scheme:
+            return True
+    return False
+
+
+def normalize_discovery_service_url(
+    url: str,
+    *,
+    service_type: Optional[str] = None,
+) -> str:
+    """
+    Resolve a Discovery Service base or partial path to the webhook-compatible raw endpoint.
+
+    See https://discovery-service-production-8955.up.railway.app/docs — ``GET /v1/discovery/raw``.
+    """
+    parsed = urlparse(url.strip())
+    path = parsed.path.rstrip("/")
+    if path.endswith(DISCOVERY_SERVICE_RAW_PATH):
+        resolved_path = path
+    elif path.endswith("/v1/discovery"):
+        resolved_path = DISCOVERY_SERVICE_RAW_PATH
+    elif not path:
+        resolved_path = DISCOVERY_SERVICE_RAW_PATH
+    else:
+        return url
+
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    service = service_type or discovery_service_type()
+    if service and not any(key == "serviceType" for key, _ in query_pairs):
+        query_pairs.append(("serviceType", service))
+    query = urlencode(query_pairs, doseq=True, quote_via=quote, safe="/")
+    return urlunparse(parsed._replace(path=resolved_path, query=query))
+
+
+def resolve_discovery_endpoint(
+    discovery_url: str,
+    *,
+    service_type: Optional[str] = None,
+) -> tuple[str, bool]:
+    """
+    Return (endpoint_url, uses_discovery_service_api).
+
+    Cloudspe / signer webhook URLs are returned unchanged.
+    """
+    if is_discovery_service_endpoint(discovery_url) or _looks_like_discovery_service_base(discovery_url):
+        return (
+            normalize_discovery_service_url(discovery_url, service_type=service_type),
+            True,
+        )
+    return discovery_url, False
+
+
+def _looks_like_discovery_service_base(url: str) -> bool:
+    base = read_discovery_service_url()
+    if base and url.rstrip("/").startswith(base.rstrip("/")):
+        return True
+    host = urlparse(url).hostname or ""
+    return "discovery-service" in host
 
 
 def _normalize_filter_values(value: Optional[FilterValue]) -> list[str]:
@@ -48,7 +144,16 @@ def _append_caps(url: str, capabilities: Optional[lp_rpc_pb2.Capabilities]) -> s
     """
     if capabilities is None:
         return url
-    return _append_query_values(url, [("caps", cap) for cap in capabilities_to_query(capabilities)])
+    return _append_cap_strings(url, capabilities_to_query(capabilities))
+
+
+def _append_cap_strings(url: str, cap_values: Sequence[str], *, discovery_service: bool = False) -> str:
+    if not cap_values:
+        return url
+    values = cap_values
+    if discovery_service:
+        values = [discovery_service_capability_name(cap) for cap in cap_values]
+    return _append_query_values(url, [("caps", cap) for cap in values])
 
 
 def _append_runner_filters(
@@ -97,17 +202,32 @@ def discover_orchestrators(
             return orch_list
 
     if discovery_url:
-        discovery_endpoint = _parse_http_url(discovery_url).geturl()
+        discovery_endpoint, uses_discovery_service = resolve_discovery_endpoint(discovery_url)
+        discovery_endpoint = _parse_http_url(discovery_endpoint).geturl()
+        request_headers = discovery_headers if discovery_headers is not None else signer_headers
+    elif read_discovery_service_url():
+        discovery_endpoint, uses_discovery_service = resolve_discovery_endpoint(
+            read_discovery_service_url() or "",
+        )
+        discovery_endpoint = _parse_http_url(discovery_endpoint).geturl()
         request_headers = discovery_headers if discovery_headers is not None else signer_headers
     elif signer_url:
         discovery_endpoint = f"{_http_origin(signer_url)}/discover-orchestrators"
+        uses_discovery_service = False
         request_headers = signer_headers
     else:
         _LOG.debug("discover_orchestrators failed: no discovery inputs")
-        raise LivepeerGatewayError("discover_orchestrators requires discovery_url or signer_url")
+        raise LivepeerGatewayError(
+            "discover_orchestrators requires discovery_url, LIVEPEER_DISCOVERY_SERVICE_URL, or signer_url",
+        )
 
     if capabilities is not None:
-        discovery_endpoint = _append_caps(discovery_endpoint, capabilities)
+        cap_values = capabilities_to_query(capabilities)
+        discovery_endpoint = _append_cap_strings(
+            discovery_endpoint,
+            cap_values,
+            discovery_service=uses_discovery_service,
+        )
 
     try:
         _LOG.debug(
@@ -167,14 +287,23 @@ async def discover_runners(
     (app=a OR app=b) AND (gpu=H100 OR gpu=L40S).
     """
     if discovery_url:
-        discovery_endpoint = _parse_http_url(discovery_url).geturl()
+        discovery_endpoint, _uses_discovery_service = resolve_discovery_endpoint(discovery_url)
+        discovery_endpoint = _parse_http_url(discovery_endpoint).geturl()
+        request_headers = discovery_headers if discovery_headers is not None else signer_headers
+    elif read_discovery_service_url():
+        discovery_endpoint, _uses_discovery_service = resolve_discovery_endpoint(
+            read_discovery_service_url() or "",
+        )
+        discovery_endpoint = _parse_http_url(discovery_endpoint).geturl()
         request_headers = discovery_headers if discovery_headers is not None else signer_headers
     elif signer_url:
         discovery_endpoint = f"{_http_origin(signer_url)}/discover-orchestrators"
         request_headers = signer_headers
     else:
         _LOG.debug("discover_runners failed: no discovery inputs")
-        raise LivepeerGatewayError("discover_runners requires discovery_url or signer_url")
+        raise LivepeerGatewayError(
+            "discover_runners requires discovery_url, LIVEPEER_DISCOVERY_SERVICE_URL, or signer_url",
+        )
 
     app_filters = _normalize_filter_values(app)
     gpu_filters = _normalize_filter_values(gpu)

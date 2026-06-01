@@ -7,7 +7,11 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
-from livepeer_gateway.discovery import DEFAULT_DISCOVERY_TIMEOUT
+from livepeer_gateway.discovery import (
+    DEFAULT_DISCOVERY_TIMEOUT,
+    normalize_discovery_service_url,
+    read_discovery_service_url,
+)
 
 DEFAULT_BILLING_URL = "http://localhost:3001"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8080/realms/clearinghouse"
@@ -44,7 +48,10 @@ def add_facade_args(parser: argparse.ArgumentParser, *, dev_defaults: bool = Fal
     parser.add_argument(
         "--discovery-url",
         default=None,
-        help="Override discovery URL (default: {signer}/discover-orchestrators?cap=MODEL)",
+        help=(
+            "Override discovery URL. Defaults to LIVEPEER_DISCOVERY_SERVICE_URL raw endpoint "
+            "or {signer}/discover-orchestrators?cap=MODEL"
+        ),
     )
     parser.add_argument(
         "--discovery-timeout",
@@ -90,6 +97,9 @@ def resolve_discovery_url(
 ) -> str | None:
     if args.discovery_url:
         return args.discovery_url
+    service_base = read_discovery_service_url()
+    if service_base:
+        return normalize_discovery_service_url(service_base)
     base = resolve_signer_url(args, signer_attr=signer_attr)
     if base:
         return f"{base.rstrip('/')}/discover-orchestrators?cap={model}"

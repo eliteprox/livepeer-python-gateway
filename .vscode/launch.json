@@ -137,13 +137,13 @@
             "justMyCode": true
         },
         {
-            "name": "write_frames (local orch)",
+            "name": "write_frames (TEST BENCH)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/examples/write_frames.py",
             "args": [
                 "--discovery-url",
-                "https://naap-api.cloudspe.com/v1/discover/orchestrators",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
                 "--billing-url", "http://localhost:3002",
                 "--issuer-url", "http://localhost:3001/api/v1/oidc",
                 "--client-id", "app_51803fb3e53dce667cf0e4df",
@@ -151,11 +151,12 @@
                 "streamdiffusion-sdxl",
                 "--count",
                 "900000",
-                // "--clear-token-cache",
+                "--clear-token-cache",
                 "--debug",
             ],
             "env": {
-                "LOG_LEVEL": "DEBUG"
+                "LOG_LEVEL": "DEBUG",
+                "LIVEPEER_OIDC_DEVICE_POLL_TIMEOUT": "120"
             },
             "console": "integratedTerminal",
             "python": "${command:python.interpreterPath}",
@@ -202,18 +203,18 @@
             "name": "Python: byoc_write_frames (billing)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/byoc_write_frames.py",
+            "program": "${workspaceFolder}/examples/write_frames.py",
             "args": [
-                "--billing-url",
-                "http://localhost:3000",
-                "--capability",
-                "comfystream",
+                "--token",
+                "eyJzaWduZXIiOiJodHRwczovL3B5bXRob3VzZS5jb20vYXBpL3NpZ25lciIsImRpc2NvdmVyeSI6Imh0dHBzOi8vb3BlcmF0b3IubGl2ZXBlZXIub3JnL2FwaS92MS9vcmNoZXN0cmF0b3ItbGVhZGVyYm9hcmQvcHl0aG9uLWdhdGV3YXk/YmlsbGluZ1Byb3ZpZGVyPXB5bXRob3VzZSIsInNpZ25lcl9oZWFkZXJzIjp7IkF1dGhvcml6YXRpb24iOiJCZWFyZXIgcG10aF9lMjIyZTBiNDk1NDY2MjZlYjE2ZjQ3YzkxNjZhMWEwM2E2ZTk5NWE3ZmY3NDViYjA3MDRkMjc1MmM4YzVmYTQzIn0sImRpc2NvdmVyeV9oZWFkZXJzIjp7IkF1dGhvcml6YXRpb24iOiJCZWFyZXIgZ3dfMTYwY2E3YTE4M2NlYzIyN2U0ODMyOTIwYmI4ZWMwODU4MzRlNjIwOThiMWY1ZTMzMjc3MTI0MjIzODUxODhiNSJ9fQ==",
+                "--model",
+                "streamdiffusion-sdxl",
                 "--count",
                 "900000",
             ],
-            "env": {
-                "LOG_LEVEL": "DEBUG",
-            },
+            // "env": {
+            //     "LOG_LEVEL": "DEBUG",
+            // },
             "console": "integratedTerminal",
             "justMyCode": true
         },

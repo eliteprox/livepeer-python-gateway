@@ -60,6 +60,8 @@ DEFAULT_CLIENT_ID = "livepeer-sdk"
 DEFAULT_SCOPES = "openid profile sign:job"
 _CALLBACK_PATH = "/callback"
 _AUTH_TIMEOUT_S = 300
+_DEFAULT_OAUTH_HTTP_TIMEOUT_S = 30.0
+_DEVICE_TOKEN_REQUEST_TIMEOUT_S = 120.0
 
 
 @dataclass
@@ -76,6 +78,28 @@ def _oauth_verify() -> bool:
     return not bool(os.environ.get("LIVEPEER_ALLOW_INSECURE_TLS"))
 
 
+def _env_timeout_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _default_oauth_http_timeout() -> float:
+    return _env_timeout_seconds("LIVEPEER_OIDC_HTTP_TIMEOUT", _DEFAULT_OAUTH_HTTP_TIMEOUT_S)
+
+
+def _device_token_request_timeout() -> float:
+    return _env_timeout_seconds(
+        "LIVEPEER_OIDC_DEVICE_POLL_TIMEOUT",
+        _DEVICE_TOKEN_REQUEST_TIMEOUT_S,
+    )
+
+
 def _build_oauth2_client(
     *,
     client_id: Optional[str] = None,
@@ -83,6 +107,7 @@ def _build_oauth2_client(
     redirect_uri: Optional[str] = None,
     token: Optional[dict[str, Any]] = None,
     code_challenge_method: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> OAuth2Client:
     return OAuth2Client(
         client_id=client_id,
@@ -91,7 +116,7 @@ def _build_oauth2_client(
         token=token,
         token_endpoint_auth_method="none",
         code_challenge_method=code_challenge_method,
-        timeout=15.0,
+        timeout=timeout if timeout is not None else _default_oauth_http_timeout(),
         verify=_oauth_verify(),
         headers={"Accept": "application/json"},
     )
@@ -256,6 +281,7 @@ def login(
                 redirect_uri=redirect_uri,
                 resource=config.issuer,
                 state=state,
+                timeout=_device_token_request_timeout(),
             )
         except Exception as exc:
             raise _OIDCError(f"Token exchange failed: {exc}") from exc
@@ -349,6 +375,7 @@ def device_login(
                     "code_verifier": code_verifier,
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=_device_token_request_timeout(),
             )
 
             if resp.status_code == 200:
