@@ -27,7 +27,7 @@ from .media_publish import MediaPublish, MediaPublishConfig
 from .http import _http_origin, post_json_sync
 from .selection import orchestrator_selector
 from .remote_signer import PaymentSession
-from .auth_resolve import resolve_signer_auth
+from .auth_resolve import SignerAuthRefreshContext, resolve_signer_auth
 from .token import parse_token
 from .trickle_subscriber import TrickleSubscriber
 
@@ -338,6 +338,10 @@ def start_lv2v(
     if resolved_signer_headers is None:
         resolved_signer_headers = signer_headers
 
+    had_explicit_signer_bearer = bool(
+        resolved_signer_headers and resolved_signer_headers.get("Authorization")
+    )
+
     resolved_discovery_url = token_data.get("discovery") if token_data else None
     if resolved_discovery_url is None:
         resolved_discovery_url = discovery_url
@@ -380,6 +384,22 @@ def start_lv2v(
         clear_token_cache=clear_token_cache,
     )
 
+    signer_auth_refresh: Optional[SignerAuthRefreshContext] = None
+    if (
+        resolved_billing_url
+        and resolved_issuer_url
+        and not had_explicit_signer_bearer
+    ):
+        signer_auth_refresh = SignerAuthRefreshContext(
+            billing_url=resolved_billing_url,
+            issuer_url=resolved_issuer_url,
+            signer_url=resolved_signer_url,
+            oidc_client_id=resolved_oidc_client_id,
+            oidc_scopes=resolved_oidc_scopes,
+            scope=scope,
+            headless=headless,
+        )
+
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
     # Orchestrator discovery precedence after token-first field resolution:
     # token orchestrators -> explicit orch_url -> token discovery ->
@@ -418,6 +438,7 @@ def start_lv2v(
                 type="lv2v",
                 capabilities=capabilities,
                 use_tofu=use_tofu,
+                signer_auth_refresh=signer_auth_refresh,
             )
             p = session.get_payment()
             headers: dict[str, str] = {

@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livepeer_gateway.auth_resolve import (
+    SignerAuthRefreshContext,
     _extract_signer_access_token,
     exchange_device_token_via_dashboard,
+    refresh_signer_credentials,
     resolve_signer_auth,
 )
 from livepeer_gateway.errors import LivepeerGatewayError
@@ -127,6 +129,23 @@ def test_resolve_signer_auth_clears_cache_when_requested() -> None:
         client_id="app_demo",
         scopes="openid profile sign:job",
     )
+
+
+def test_refresh_signer_credentials_re_runs_oidc_exchange() -> None:
+    ctx = SignerAuthRefreshContext(
+        billing_url="http://localhost:3001",
+        issuer_url="http://localhost:3001/api/v1/oidc",
+        signer_url="http://127.0.0.1:8080",
+        oidc_client_id="app_demo",
+    )
+    with patch(
+        "livepeer_gateway.auth_resolve.resolve_signer_auth",
+        return_value=("http://127.0.0.1:8080", {"Authorization": "Bearer new"}, None, None),
+    ) as resolve:
+        headers = refresh_signer_credentials(ctx)
+    assert headers["Authorization"] == "Bearer new"
+    resolve.assert_called_once()
+    assert resolve.call_args.kwargs["signer_headers"] is None
 
 
 def test_start_lv2v_explicit_signer_headers_win_over_billing() -> None:

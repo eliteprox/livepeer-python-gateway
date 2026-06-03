@@ -8,7 +8,7 @@ import re
 import ssl
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -16,7 +16,17 @@ import aiohttp
 
 from . import lp_rpc_pb2
 from .async_cache import async_lru_cache
-from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired
+from .errors import (
+    LivepeerGatewayError,
+    LivepeerHTTPError,
+    PaymentError,
+    SignerRefreshRequired,
+)
+from .signer_bearer import should_refresh_signer_bearer
+
+if TYPE_CHECKING:
+    from .auth_resolve import SignerAuthRefreshContext
+
 _LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -207,6 +217,7 @@ class LivePaymentSession:
         manifest_id: str,
         orchestrator_url: Optional[str] = None,
         max_refresh_retries: int = 3,
+        signer_auth_refresh: Optional["SignerAuthRefreshContext"] = None,
     ) -> None:
         self._signer_url = signer_url
         self._signer_headers = _freeze_headers(signer_headers)
@@ -216,6 +227,31 @@ class LivePaymentSession:
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: Optional[dict[str, Any]] = None
         self._orchestrator_url = orchestrator_url
+        self._signer_auth_refresh = signer_auth_refresh
+
+    def _signer_headers_dict(self) -> Optional[dict[str, str]]:
+        if not self._signer_headers:
+            return None
+        return dict(self._signer_headers)
+
+    def _refresh_signer_credentials(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        from .auth_resolve import refresh_signer_credentials
+
+        headers = refresh_signer_credentials(self._signer_auth_refresh)
+        self._signer_headers = _freeze_headers(headers)
+
+    def _ensure_fresh_signer_headers(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        headers = self._signer_headers_dict()
+        if not should_refresh_signer_bearer(
+            headers,
+            skew_seconds=self._signer_auth_refresh.refresh_skew_seconds,
+        ):
+            return
+        self._refresh_signer_credentials()
 
     async def get_payment(self) -> GetPaymentResponse:
         if not self._signer_url:
@@ -282,6 +318,7 @@ class LivePaymentSession:
     async def _payment_request(self) -> GetPaymentResponse:
         from .http import _http_origin, post_json
 
+        self._ensure_fresh_signer_headers()
         url = f"{_http_origin(self._signer_url)}/generate-live-payment"
         payload: dict[str, Any] = {
             "orchestrator": self._payment_params,
@@ -293,11 +330,30 @@ class LivePaymentSession:
 
         from .signer_identity import enrich_signer_payment_request
 
-        headers, payload = enrich_signer_payment_request(
-            dict(self._signer_headers) if self._signer_headers else None,
-            payload,
-        )
-        data = await post_json(url, payload, headers=headers or None)
+        auth_attempts = 0
+        while True:
+            headers, payload = enrich_signer_payment_request(
+                self._signer_headers_dict(),
+                payload,
+            )
+            try:
+                data = await post_json(url, payload, headers=headers or None)
+                break
+            except LivepeerHTTPError as e:
+                if (
+                    auth_attempts == 0
+                    and self._signer_auth_refresh
+                    and e.status_code in (401, 403)
+                ):
+                    _LOG.info(
+                        "Signer returned HTTP %s; refreshing credentials (url=%s)",
+                        e.status_code,
+                        url,
+                    )
+                    self._refresh_signer_credentials()
+                    auth_attempts += 1
+                    continue
+                raise
         payment = data.get("payment")
         if not isinstance(payment, str) or not payment:
             raise PaymentError(
@@ -359,6 +415,7 @@ class PaymentSession:
         capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
         use_tofu: bool = True,
         max_refresh_retries: int = 3,
+        signer_auth_refresh: Optional["SignerAuthRefreshContext"] = None,
     ) -> None:
         self._signer_url = signer_url
         self._signer_headers = signer_headers
@@ -369,6 +426,24 @@ class PaymentSession:
         self._use_tofu = use_tofu
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: Optional[dict[str, str]] = None
+        self._signer_auth_refresh = signer_auth_refresh
+
+    def _refresh_signer_credentials(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        from .auth_resolve import refresh_signer_credentials
+
+        self._signer_headers = refresh_signer_credentials(self._signer_auth_refresh)
+
+    def _ensure_fresh_signer_headers(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        if not should_refresh_signer_bearer(
+            self._signer_headers,
+            skew_seconds=self._signer_auth_refresh.refresh_skew_seconds,
+        ):
+            return
+        self._refresh_signer_credentials()
 
     def set_manifest_id(self, manifest_id: str) -> None:
         if not isinstance(manifest_id, str) or not manifest_id.strip():
@@ -399,6 +474,7 @@ class PaymentSession:
         def _payment_request() -> GetPaymentResponse:
             from .http import _http_origin, post_json_sync as post_json
 
+            self._ensure_fresh_signer_headers()
             base = _http_origin(self._signer_url)
             url = f"{base}/generate-live-payment"
 
@@ -419,11 +495,30 @@ class PaymentSession:
 
             from .signer_identity import enrich_signer_payment_request
 
-            headers, payload = enrich_signer_payment_request(
-                self._signer_headers,
-                payload,
-            )
-            data = post_json(url, payload, headers=headers or None)
+            auth_attempts = 0
+            while True:
+                headers, payload = enrich_signer_payment_request(
+                    self._signer_headers,
+                    payload,
+                )
+                try:
+                    data = post_json(url, payload, headers=headers or None)
+                    break
+                except LivepeerHTTPError as e:
+                    if (
+                        auth_attempts == 0
+                        and self._signer_auth_refresh
+                        and e.status_code in (401, 403)
+                    ):
+                        _LOG.info(
+                            "Signer returned HTTP %s; refreshing credentials (url=%s)",
+                            e.status_code,
+                            url,
+                        )
+                        self._refresh_signer_credentials()
+                        auth_attempts += 1
+                        continue
+                    raise
             payment = data.get("payment")
             if not isinstance(payment, str) or not payment:
                 raise PaymentError(

@@ -1,12 +1,50 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from .errors import LivepeerGatewayError
 from .http import post_json_sync
 
 _LOG = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SignerAuthRefreshContext:
+    """Inputs to re-run OIDC + device exchange for a fresh signer JWT mid-stream."""
+
+    billing_url: str
+    issuer_url: str
+    signer_url: Optional[str] = None
+    oidc_client_id: Optional[str] = None
+    oidc_scopes: str = "openid profile sign:job"
+    scope: Optional[str] = "sign:job"
+    headless: bool = True
+    refresh_skew_seconds: int = 60
+
+
+def refresh_signer_credentials(ctx: SignerAuthRefreshContext) -> dict[str, str]:
+    """
+    Obtain a new signer bearer via OIDC refresh/login + Dashboard device exchange.
+
+    Does not pass an existing Authorization header so ``resolve_signer_auth`` always
+    re-mints credentials.
+    """
+    _LOG.info("Refreshing signer credentials (issuer=%s)", ctx.issuer_url)
+    _, headers, _, _ = resolve_signer_auth(
+        billing_url=ctx.billing_url,
+        issuer_url=ctx.issuer_url,
+        signer_url=ctx.signer_url,
+        signer_headers=None,
+        oidc_client_id=ctx.oidc_client_id,
+        oidc_scopes=ctx.oidc_scopes,
+        scope=ctx.scope,
+        headless=ctx.headless,
+    )
+    if not headers or not headers.get("Authorization"):
+        raise LivepeerGatewayError("Signer credential refresh did not return Authorization")
+    return headers
 
 
 def _discovery_headers_from_signer(
