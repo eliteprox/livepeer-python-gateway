@@ -1,53 +1,40 @@
 from __future__ import annotations
 
-import os
+from urllib.parse import parse_qs, urlparse
 
-from livepeer_gateway.discovery import (
-    discovery_service_capability_name,
-    is_discovery_service_endpoint,
-    normalize_discovery_service_url,
-    resolve_discovery_endpoint,
-)
+from livepeer_gateway import discovery
+from livepeer_gateway.capabilities import CapabilityId, build_capabilities
 
 
-def test_discovery_service_capability_name_strips_pipeline_prefix() -> None:
-    assert discovery_service_capability_name("live-video-to-video/streamdiffusion-sdxl") == (
-        "streamdiffusion-sdxl"
-    )
-    assert discovery_service_capability_name("streamdiffusion-sdxl") == "streamdiffusion-sdxl"
-
-
-def test_normalize_discovery_service_base_url() -> None:
-    url = normalize_discovery_service_url(
-        "https://discovery-service-production-8955.up.railway.app",
-        service_type="legacy",
-    )
-    assert url == (
-        "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy"
-    )
-
-
-def test_resolve_discovery_endpoint_leaves_cloudspe_unchanged() -> None:
-    cloudspe = "https://naap-api.cloudspe.com/v1/discover/orchestrators"
-    endpoint, uses_service = resolve_discovery_endpoint(cloudspe)
-    assert endpoint == cloudspe
-    assert uses_service is False
-
-
-def test_is_discovery_service_endpoint_for_raw_path() -> None:
-    assert is_discovery_service_endpoint(
+def test_append_caps_sends_full_pipeline_model_form() -> None:
+    caps = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, "streamdiffusion-sdxl")
+    url = discovery._append_caps(
         "https://discovery.example.com/v1/discovery/raw?serviceType=legacy",
+        caps,
     )
+    query = parse_qs(urlparse(url).query)
+    assert query["serviceType"] == ["legacy"]
+    assert query["caps"] == ["live-video-to-video/streamdiffusion-sdxl"]
 
 
-def test_read_discovery_service_url_from_env(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "LIVEPEER_DISCOVERY_SERVICE_URL",
-        "https://discovery-service-production-8955.up.railway.app",
+def test_discover_orchestrators_parses_addresses(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_get_json_sync(url, *, headers=None, timeout=None):
+        captured["url"] = url
+        return [
+            {"address": "https://orch-a.example:8935", "capabilities": ["streamdiffusion-sdxl"]},
+            {"address": "https://orch-b.example:8935"},
+            {"not_address": "ignored"},
+        ]
+
+    monkeypatch.setattr(discovery, "get_json_sync", fake_get_json_sync)
+
+    caps = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, "streamdiffusion-sdxl")
+    result = discovery.discover_orchestrators(
+        discovery_url="https://discovery.example.com/v1/discovery/raw?serviceType=legacy",
+        capabilities=caps,
     )
-    endpoint, uses_service = resolve_discovery_endpoint(
-        "https://discovery-service-production-8955.up.railway.app",
-    )
-    assert uses_service is True
-    assert "/v1/discovery/raw" in endpoint
-    monkeypatch.delenv("LIVEPEER_DISCOVERY_SERVICE_URL", raising=False)
+
+    assert result == ["https://orch-a.example:8935", "https://orch-b.example:8935"]
+    assert "caps=live-video-to-video/streamdiffusion-sdxl" in captured["url"]

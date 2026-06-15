@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import ssl
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import ParseResult, urlparse
 from urllib.request import Request, urlopen
-
-import aiohttp
 
 from .errors import (
     LivepeerHTTPError,
@@ -104,31 +101,6 @@ def _json_request_parts(
 
     resolved_method = method.upper() if method else ("POST" if payload is not None else "GET")
     return resolved_method, req_headers, body
-
-
-def _raise_http_json_error(
-    status: int,
-    url: str,
-    body: str = "",
-    headers: Optional[dict[str, str]] = None,
-) -> None:
-    message = _extract_error_message_from_body(body)
-    body_part = f"; body={message!r}" if message else ""
-    if status == 480:
-        raise SignerRefreshRequired(
-            f"Signer returned HTTP 480 (refresh session required) (url={url}){body_part}",
-            orchestrator_url=_header_value(headers or {}, _REFRESH_SESSION_ORCHESTRATOR_URL_HEADER),
-        )
-    if status == 482:
-        raise SkipPaymentCycle(
-            f"Signer returned HTTP 482 (skip payment cycle) (url={url}){body_part}"
-        )
-    raise LivepeerHTTPError(
-        status,
-        url,
-        body,
-        f"HTTP {status} from endpoint (url={url}){body_part}",
-    )
 
 
 def _ensure_json_object(data: Any, *, url: str) -> dict[str, Any]:
@@ -238,97 +210,6 @@ def get_json_sync(
     GET JSON from `url` and parse the response.
     """
     return request_json_sync(url, headers=headers, timeout=timeout)
-
-
-async def request_json(
-    url: str,
-    *,
-    method: Optional[str] = None,
-    payload: Optional[dict[str, Any]] = None,
-    headers: Optional[dict[str, str]] = None,
-    timeout: float = 5.0,
-) -> Any:
-    """
-    Make an async JSON HTTP request and parse the JSON response.
-
-    If method is None, defaults to POST when payload is provided, otherwise GET.
-
-    Raises LivepeerGatewayError on HTTP/network/JSON parsing errors.
-    """
-    resolved_method, req_headers, body = _json_request_parts(
-        url,
-        method=method,
-        payload=payload,
-        headers=headers,
-    )
-
-    try:
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(timeout=client_timeout, connector=connector) as session:
-            async with session.request(resolved_method, url, data=body, headers=req_headers) as resp:
-                raw = await resp.text()
-                if resp.status >= 400:
-                    _raise_http_json_error(resp.status, url, raw, dict(resp.headers.items()))
-        data: Any = json.loads(raw)
-    except (SignerRefreshRequired, SkipPaymentCycle, LivepeerGatewayError):
-        raise
-    except json.JSONDecodeError as e:
-        raise LivepeerGatewayError(f"HTTP JSON error: endpoint did not return valid JSON: {e} (url={url})") from e
-    except ConnectionRefusedError as e:
-        raise LivepeerGatewayError(
-            f"HTTP JSON error: connection refused (is the server running? is the host/port correct?) (url={url})"
-        ) from e
-    except getattr(aiohttp, "ClientConnectorError", ()) as e:
-        os_error = getattr(e, "os_error", None)
-        if isinstance(os_error, ConnectionRefusedError):
-            raise LivepeerGatewayError(
-                f"HTTP JSON error: connection refused (is the server running? is the host/port correct?) (url={url})"
-            ) from e
-        raise LivepeerGatewayError(
-            f"HTTP JSON error: failed to reach endpoint: {getattr(e, 'message', e)} (url={url})"
-        ) from e
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        raise LivepeerGatewayError(
-            f"HTTP JSON error: failed to reach endpoint: {getattr(e, 'message', e)} (url={url})"
-        ) from e
-    except Exception as e:
-        raise LivepeerGatewayError(
-            f"HTTP JSON error: unexpected error: {e.__class__.__name__}: {e} (url={url})"
-        ) from e
-
-    return data
-
-
-async def post_json(
-    url: str,
-    payload: dict[str, Any],
-    *,
-    headers: Optional[dict[str, str]] = None,
-    timeout: float = 5.0,
-) -> dict[str, Any]:
-    """
-    POST JSON to `url` and parse a JSON object response.
-    """
-    data = await request_json(
-        url,
-        payload=payload,
-        headers=headers,
-        timeout=timeout,
-    )
-    return _ensure_json_object(data, url=url)
-
-
-async def get_json(
-    url: str,
-    *,
-    headers: Optional[dict[str, str]] = None,
-    timeout: float = 5.0,
-) -> Any:
-    """
-    GET JSON from `url` and parse the response.
-    """
-    return await request_json(url, headers=headers, timeout=timeout)
 
 
 def _parse_http_url(url: str, *, context: str = "URL") -> ParseResult:

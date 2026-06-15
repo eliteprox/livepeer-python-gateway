@@ -7,7 +7,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/examples/write_frames.py",
             "args": [
-                "--discovery-url",
+                "--discovery",
                 "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
                 "--billing-url",
                 "https://staging.pymthouse.com",

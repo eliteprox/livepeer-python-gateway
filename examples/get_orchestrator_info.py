@@ -29,8 +29,8 @@ def _parse_args() -> argparse.Namespace:
             "  python examples/get_orchestrator_info.py localhost:8935 --signer https://signer.example.com\n"
             "\n"
             "  # Discovery URL\n"
-            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators\n"
-            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators --signer https://signer.example.com\n"
+            "  python examples/get_orchestrator_info.py --discovery https://discover.example.com/orchestrators\n"
+            "  python examples/get_orchestrator_info.py --discovery https://discover.example.com/orchestrators --signer https://signer.example.com\n"
             "\n"
             "  # Gateway token\n"
             "  python examples/get_orchestrator_info.py --token <base64-token>\n"
@@ -40,7 +40,7 @@ def _parse_args() -> argparse.Namespace:
             "  python examples/get_orchestrator_info.py --signer https://signer.example.com\n"
             "\n"
             "  # PymtHouse / Dashboard facade auth (OIDC device login + signer exchange)\n"
-            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators \\\n"
+            "  python examples/get_orchestrator_info.py --discovery https://discover.example.com/orchestrators \\\n"
             "      --billing-url https://pymthouse.com --client-id app_xxxxxxxx\n"
             "\n"
             "  # JSON / JSONL output\n"
@@ -347,7 +347,7 @@ def _resolve_discovery_args(args: argparse.Namespace) -> tuple[Any, str | None, 
 
     discovery = token_data.get("discovery") if token_data else None
     if discovery is None:
-        discovery = args.discovery_url
+        discovery = args.discovery
 
     discovery_headers = token_data.get("discovery_headers") if token_data else None
 

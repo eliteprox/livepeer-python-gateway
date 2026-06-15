@@ -7,11 +7,7 @@ import os
 from typing import Any
 
 from livepeer_gateway.auth_resolve import resolve_issuer_url
-from livepeer_gateway.discovery import (
-    DEFAULT_DISCOVERY_TIMEOUT,
-    normalize_discovery_service_url,
-    read_discovery_service_url,
-)
+from livepeer_gateway.discovery import DEFAULT_DISCOVERY_TIMEOUT
 
 DEFAULT_BILLING_URL = "http://localhost:3001"
 DEFAULT_CLIENT_ID = "app_demo"
@@ -40,12 +36,9 @@ def add_facade_args(parser: argparse.ArgumentParser, *, dev_defaults: bool = Fal
         help="Public OIDC app client id (app_*)",
     )
     parser.add_argument(
-        "--discovery-url",
+        "--discovery",
         default=None,
-        help=(
-            "Override discovery URL. Defaults to LIVEPEER_DISCOVERY_SERVICE_URL raw endpoint "
-            "or {signer}/discover-orchestrators?cap=MODEL"
-        ),
+        help="Explicit discovery endpoint URL (overrides signer discovery).",
     )
     parser.add_argument(
         "--discovery-timeout",
@@ -81,11 +74,8 @@ def resolve_discovery_url(
     *,
     signer_attr: str = "signer",
 ) -> str | None:
-    if args.discovery_url:
-        return args.discovery_url
-    service_base = read_discovery_service_url()
-    if service_base:
-        return normalize_discovery_service_url(service_base)
+    if args.discovery:
+        return args.discovery
     base = resolve_signer_url(args, signer_attr=signer_attr)
     if base:
         return f"{base.rstrip('/')}/discover-orchestrators?cap={model}"
@@ -116,6 +106,6 @@ def facade_start_lv2v_kwargs(
     if signer:
         kwargs["signer_url"] = signer
         kwargs["discovery_url"] = resolve_discovery_url(args, model, signer_attr=signer_attr)
-    elif args.discovery_url:
-        kwargs["discovery_url"] = args.discovery_url
+    elif args.discovery:
+        kwargs["discovery_url"] = args.discovery
     return kwargs
