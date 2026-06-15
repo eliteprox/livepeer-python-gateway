@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -7,12 +8,25 @@ import re
 import ssl
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import aiohttp
+
 from . import lp_rpc_pb2
-from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired, SkipPaymentCycle
+from .async_cache import async_lru_cache
+from .errors import (
+    LivepeerGatewayError,
+    LivepeerHTTPError,
+    PaymentError,
+    SignerRefreshRequired,
+)
+from .signer_bearer import should_refresh_signer_bearer
+
+if TYPE_CHECKING:
+    from .auth_resolve import SignerAuthRefreshContext
+
 _LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -24,13 +38,14 @@ class GetPaymentResponse:
 @dataclass(frozen=True)
 class SignerMaterial:
     """
-    Material returned by the remote signer.
+    Material returned by the remote signer for gRPC GetOrchestrator.
+
     address: 20-byte broadcaster ETH address
     sig: signature bytes (length depends on scheme; commonly 65 bytes for ECDSA)
     address_hex: original hex string from signer (preserves EIP-55 checksum casing)
     """
-    address: bytes
-    sig: bytes
+    address: Optional[bytes]
+    sig: Optional[bytes]
     address_hex: str = ""
 
 
@@ -70,6 +85,50 @@ def _hex_to_bytes(s: str, *, expected_len: Optional[int] = None) -> bytes:
     return b
 
 
+def _signer_material_from_json(
+    data: dict[str, Any],
+    signer_url: str,
+) -> SignerMaterial:
+    if "address" not in data or "signature" not in data:
+        raise RemoteSignerError(
+            signer_url,
+            f"Remote signer JSON must contain 'address' and 'signature': {data!r}",
+            cause=None,
+        ) from None
+
+    address = data["address"]
+    sig = data["signature"]
+    if not isinstance(address, str) or not address:
+        raise RemoteSignerError(
+            signer_url,
+            f"Remote signer 'address' must be a non-empty string: {address!r}",
+            cause=None,
+        ) from None
+    if not isinstance(sig, str) or not sig:
+        raise RemoteSignerError(
+            signer_url,
+            f"Remote signer 'signature' must be a non-empty string: {sig!r}",
+            cause=None,
+        ) from None
+
+    address_hex_str = address.strip()
+    try:
+        address_bytes = _hex_to_bytes(address_hex_str, expected_len=20)
+        sig_bytes = _hex_to_bytes(sig.strip())
+    except ValueError as e:
+        raise RemoteSignerError(
+            signer_url,
+            f"Remote signer returned invalid hex address/signature: {e}",
+            cause=e,
+        ) from None
+
+    return SignerMaterial(
+        address=address_bytes,
+        sig=sig_bytes,
+        address_hex=address_hex_str,
+    )
+
+
 @lru_cache(maxsize=None)
 def get_orch_info_sig(
     signer_url: str,
@@ -80,7 +139,7 @@ def get_orch_info_sig(
     Fetch signer material exactly once per (signer_url, headers) combination
     for the lifetime of the process. Subsequent calls return cached data.
     """
-    from .orchestrator import _extract_error_message, _http_origin, post_json
+    from .http import _extract_error_message, _http_origin, post_json_sync as post_json
 
     # check for offchain mode
     if not signer_url:
@@ -95,23 +154,12 @@ def get_orch_info_sig(
         # Some signers accept/expect POST with an empty JSON object.
         data = post_json(signer_url, {}, headers=headers, timeout=5.0)
 
-        # Expected response shape (example):
-        # {
-        #   "address": "0x0123...abcd",   # 20-byte ETH address hex
-        #   "signature": "0x..."          # signature hex
-        # }
-        if "address" not in data or "signature" not in data:
-            raise RemoteSignerError(
-                signer_url,
-                f"Remote signer JSON must contain 'address' and 'signature': {data!r}",
-                cause=None,
-            ) from None
-
-        address_hex_str = str(data["address"])
-        address = _hex_to_bytes(address_hex_str, expected_len=20)
-        sig = _hex_to_bytes(str(data["signature"]))  # signature length may vary
+        signer = _signer_material_from_json(data, signer_url)
 
     except LivepeerGatewayError as e:
+        if isinstance(e, RemoteSignerError):
+            raise
+
         # post_json wraps the underlying exception as __cause__; convert back into
         # a signer-specific error message.
         cause = e.__cause__ or e
@@ -152,7 +200,226 @@ def get_orch_info_sig(
             cause=cause if isinstance(cause, BaseException) else e,
         ) from None
 
-    return SignerMaterial(address=address, sig=sig, address_hex=address_hex_str)
+    return signer
+
+
+@async_lru_cache(maxsize=128)
+async def get_signer_info(
+    signer_url: str,
+    # frozenset instead of dict because cache keys require hashable arguments.
+    _signer_headers: Optional[frozenset[tuple[str, str]]] = None,
+) -> SignerMaterial:
+    """
+    Async-native version of get_orch_info_sig for callers that should not block
+    the event loop or use gRPC.
+    """
+    from .http import _http_origin, post_json
+
+    if not signer_url:
+        return SignerMaterial(address=None, sig=None)
+
+    url = f"{_http_origin(signer_url)}/sign-orchestrator-info"
+    headers = dict(_signer_headers) if _signer_headers else None
+    data = await post_json(url, {}, headers=headers, timeout=5.0)
+    return _signer_material_from_json(data, url)
+
+
+class LivePaymentSession:
+    def __init__(
+        self,
+        signer_url: Optional[str],
+        *,
+        signer_headers: Optional[dict[str, str]] = None,
+        type: str,
+        payment_params: str,
+        manifest_id: str,
+        orchestrator_url: Optional[str] = None,
+        max_refresh_retries: int = 3,
+        signer_auth_refresh: Optional["SignerAuthRefreshContext"] = None,
+    ) -> None:
+        self._signer_url = signer_url
+        self._signer_headers = _freeze_headers(signer_headers)
+        self._type = type
+        self._payment_params = payment_params
+        self._manifest_id = manifest_id
+        self._max_refresh_retries = max(0, int(max_refresh_retries))
+        self._state: Optional[dict[str, Any]] = None
+        self._orchestrator_url = orchestrator_url
+        self._signer_auth_refresh = signer_auth_refresh
+
+    def _signer_headers_dict(self) -> Optional[dict[str, str]]:
+        if not self._signer_headers:
+            return None
+        return dict(self._signer_headers)
+
+    def _refresh_signer_credentials(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        from .auth_resolve import refresh_signer_credentials
+
+        headers = refresh_signer_credentials(self._signer_auth_refresh)
+        self._signer_headers = _freeze_headers(headers)
+
+    def _ensure_fresh_signer_headers(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        headers = self._signer_headers_dict()
+        if not should_refresh_signer_bearer(
+            headers,
+            skew_seconds=self._signer_auth_refresh.refresh_skew_seconds,
+        ):
+            return
+        self._refresh_signer_credentials()
+
+    async def get_payment(self) -> GetPaymentResponse:
+        if not self._signer_url:
+            return GetPaymentResponse(payment="", seg_creds=None)
+
+        attempts = 0
+        while True:
+            try:
+                return await self._payment_request()
+            except SignerRefreshRequired as e:
+                if attempts >= self._max_refresh_retries:
+                    raise PaymentError(
+                        f"Signer refresh required after {attempts} retries: {e}"
+                    ) from e
+                if self._state is None:
+                    raise
+                orchestrator_url = e.orchestrator_url
+                if not orchestrator_url:
+                    raise PaymentError(
+                        "Signer refresh response missing Livepeer-Orchestrator-URL header"
+                    ) from e
+                await self._refresh_payment_params(orchestrator_url)
+                attempts += 1
+
+    async def send_payment(self, orchestrator_url: Optional[str] = None) -> None:
+        if not self._signer_url:
+            return
+
+        target = orchestrator_url or self._orchestrator_url
+        if not target:
+            raise PaymentError("orchestrator_url is required before sending payment")
+
+        from .http import _extract_error_message_from_body, _http_origin
+
+        payment = await self.get_payment()
+        url = f"{_http_origin(target)}/payment"
+        headers = {
+            "Livepeer-Payment": payment.payment,
+            "Livepeer-Segment": payment.seg_creds,
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=5.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, data=b"", headers=headers) as resp:
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        message = _extract_error_message_from_body(body)
+                        body_part = f"; body={message!r}" if message else ""
+                        raise PaymentError(
+                            f"HTTP payment error: HTTP {resp.status} from endpoint (url={url}){body_part}"
+                        )
+                    await resp.read()
+        except PaymentError:
+            raise
+        except getattr(aiohttp, "ClientConnectorError", ()) as e:
+            raise PaymentError(
+                f"HTTP payment error: failed to reach endpoint: {getattr(e, 'message', e)} (url={url})"
+            ) from e
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise PaymentError(
+                f"HTTP payment error: failed to reach endpoint: {getattr(e, 'message', e)} (url={url})"
+            ) from e
+
+    async def _payment_request(self) -> GetPaymentResponse:
+        from .http import _http_origin, post_json
+
+        self._ensure_fresh_signer_headers()
+        url = f"{_http_origin(self._signer_url)}/generate-live-payment"
+        payload: dict[str, Any] = {
+            "orchestrator": self._payment_params,
+            "type": self._type,
+            "ManifestID": self._manifest_id,
+        }
+        if self._state is not None:
+            payload["state"] = self._state
+
+        from .signer_identity import enrich_signer_payment_request
+
+        auth_attempts = 0
+        while True:
+            headers, payload = enrich_signer_payment_request(
+                self._signer_headers_dict(),
+                payload,
+            )
+            try:
+                data = await post_json(url, payload, headers=headers or None)
+                break
+            except LivepeerHTTPError as e:
+                if (
+                    auth_attempts == 0
+                    and self._signer_auth_refresh
+                    and e.status_code in (401, 403)
+                ):
+                    _LOG.info(
+                        "Signer returned HTTP %s; refreshing credentials (url=%s)",
+                        e.status_code,
+                        url,
+                    )
+                    self._refresh_signer_credentials()
+                    auth_attempts += 1
+                    continue
+                raise
+        payment = data.get("payment")
+        if not isinstance(payment, str) or not payment:
+            raise PaymentError(
+                f"GetPayment error: missing/invalid 'payment' in response (url={url})"
+            )
+
+        seg_creds = data.get("segCreds")
+        if seg_creds is not None and not isinstance(seg_creds, str):
+            raise PaymentError(
+                f"GetPayment error: invalid 'segCreds' in response (url={url})"
+            )
+
+        state = data.get("state")
+        if not isinstance(state, dict):
+            raise PaymentError(
+                f"Remote signer response missing 'state' object (url={url})"
+            )
+
+        self._state = state
+        return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
+
+    async def _refresh_payment_params(self, orchestrator_url: str) -> None:
+        from .http import _http_origin, post_json
+
+        signer = await get_signer_info(self._signer_url or "", self._signer_headers)
+        if not signer.address_hex:
+            raise PaymentError("Cannot refresh payment without signer address")
+
+        url = f"{_http_origin(orchestrator_url)}/refresh-payment"
+        data = await post_json(
+            url,
+            {
+                "sender": signer.address_hex,
+                "manifest_id": self._manifest_id,
+            },
+        )
+        payment_params = data.get("payment_params")
+        if not isinstance(payment_params, str) or not payment_params:
+            raise PaymentError(
+                f"RefreshPayment error: missing/invalid 'payment_params' in response (url={url})"
+            )
+        self._payment_params = payment_params
+        refreshed_orchestrator_url = data.get("orchestrator")
+        self._orchestrator_url = (
+            refreshed_orchestrator_url
+            if isinstance(refreshed_orchestrator_url, str) and refreshed_orchestrator_url.strip()
+            else orchestrator_url
+        )
 
 
 class PaymentSession:
@@ -166,6 +433,7 @@ class PaymentSession:
         capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
         use_tofu: bool = True,
         max_refresh_retries: int = 3,
+        signer_auth_refresh: Optional["SignerAuthRefreshContext"] = None,
     ) -> None:
         self._signer_url = signer_url
         self._signer_headers = signer_headers
@@ -176,6 +444,24 @@ class PaymentSession:
         self._use_tofu = use_tofu
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: Optional[dict[str, str]] = None
+        self._signer_auth_refresh = signer_auth_refresh
+
+    def _refresh_signer_credentials(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        from .auth_resolve import refresh_signer_credentials
+
+        self._signer_headers = refresh_signer_credentials(self._signer_auth_refresh)
+
+    def _ensure_fresh_signer_headers(self) -> None:
+        if not self._signer_auth_refresh:
+            return
+        if not should_refresh_signer_bearer(
+            self._signer_headers,
+            skew_seconds=self._signer_auth_refresh.refresh_skew_seconds,
+        ):
+            return
+        self._refresh_signer_credentials()
 
     def set_manifest_id(self, manifest_id: str) -> None:
         if not isinstance(manifest_id, str) or not manifest_id.strip():
@@ -204,8 +490,9 @@ class PaymentSession:
             return GetPaymentResponse(seg_creds=seg, payment="")
 
         def _payment_request() -> GetPaymentResponse:
-            from .orchestrator import _http_origin, post_json
+            from .http import _http_origin, post_json_sync as post_json
 
+            self._ensure_fresh_signer_headers()
             base = _http_origin(self._signer_url)
             url = f"{base}/generate-live-payment"
 
@@ -224,7 +511,32 @@ class PaymentSession:
             if self._state is not None:
                 payload["state"] = self._state
 
-            data = post_json(url, payload, headers=self._signer_headers)
+            from .signer_identity import enrich_signer_payment_request
+
+            auth_attempts = 0
+            while True:
+                headers, payload = enrich_signer_payment_request(
+                    self._signer_headers,
+                    payload,
+                )
+                try:
+                    data = post_json(url, payload, headers=headers or None)
+                    break
+                except LivepeerHTTPError as e:
+                    if (
+                        auth_attempts == 0
+                        and self._signer_auth_refresh
+                        and e.status_code in (401, 403)
+                    ):
+                        _LOG.info(
+                            "Signer returned HTTP %s; refreshing credentials (url=%s)",
+                            e.status_code,
+                            url,
+                        )
+                        self._refresh_signer_credentials()
+                        auth_attempts += 1
+                        continue
+                    raise
             payment = data.get("payment")
             if not isinstance(payment, str) or not payment:
                 raise PaymentError(
@@ -275,7 +587,7 @@ class PaymentSession:
         Generate a payment (via get_payment) and forward it
         to the orchestrator via POST {orch}/payment.
         """
-        from .orchestrator import _extract_error_message, _http_origin
+        from .http import _extract_error_message, _http_origin
 
         p = self.get_payment()
         if not self._info.transcoder:

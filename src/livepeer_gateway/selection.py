@@ -7,7 +7,7 @@ from typing import Optional, Sequence, Tuple
 from . import lp_rpc_pb2
 from .errors import NoOrchestratorAvailableError, OrchestratorRejection
 from .orch_info import get_orch_info
-from .orchestrator import discover_orchestrators
+from .discovery import DEFAULT_DISCOVERY_TIMEOUT, discover_orchestrators
 
 _LOG = logging.getLogger(__name__)
 
@@ -114,7 +114,11 @@ def orchestrator_selector(
     discovery_headers: Optional[dict[str, str]] = None,
     capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
     use_tofu: bool = True,
+    discovery_timeout: float | None = None,
 ) -> SelectionCursor:
+    resolved_discovery_timeout = (
+        DEFAULT_DISCOVERY_TIMEOUT if discovery_timeout is None else discovery_timeout
+    )
     orch_list = discover_orchestrators(
         orchestrators,
         signer_url=signer_url,
@@ -122,6 +126,7 @@ def orchestrator_selector(
         discovery_url=discovery_url,
         discovery_headers=discovery_headers,
         capabilities=capabilities,
+        timeout=resolved_discovery_timeout,
     )
 
     if not orch_list:

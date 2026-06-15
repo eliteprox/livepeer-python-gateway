@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "write_frames (staging)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--discovery-url",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
+                "--billing-url",
+                "https://staging.pymthouse.com",
+                "--client-id",
+                "app_13fc28fef4ecb73fb8231c52",
+                "--signer",
+                "https://pymthouse-preview.up.railway.app",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000",
+                "--debug"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

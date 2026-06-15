@@ -1,8 +1,12 @@
 import argparse
 import json
 import logging
+import os
 from typing import Any
 
+from facade_cli import add_facade_args, resolve_signer_url
+
+from livepeer_gateway.auth_resolve import resolve_issuer_url, resolve_signer_auth
 from livepeer_gateway.capabilities import (
     compute_available,
     format_capability,
@@ -10,7 +14,8 @@ from livepeer_gateway.capabilities import (
     get_per_capability_map,
 )
 from livepeer_gateway import get_orch_info
-from livepeer_gateway.orchestrator import LivepeerGatewayError, discover_orchestrators
+from livepeer_gateway.discovery import discover_orchestrators
+from livepeer_gateway.errors import LivepeerGatewayError
 from livepeer_gateway.token import parse_token
 
 def _parse_args() -> argparse.Namespace:
@@ -24,8 +29,8 @@ def _parse_args() -> argparse.Namespace:
             "  python examples/get_orchestrator_info.py localhost:8935 --signer https://signer.example.com\n"
             "\n"
             "  # Discovery URL\n"
-            "  python examples/get_orchestrator_info.py --discovery https://discover.example.com/orchestrators\n"
-            "  python examples/get_orchestrator_info.py --discovery https://discover.example.com/orchestrators --signer https://signer.example.com\n"
+            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators\n"
+            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators --signer https://signer.example.com\n"
             "\n"
             "  # Gateway token\n"
             "  python examples/get_orchestrator_info.py --token <base64-token>\n"
@@ -33,6 +38,10 @@ def _parse_args() -> argparse.Namespace:
             "\n"
             "  # Signer URL\n"
             "  python examples/get_orchestrator_info.py --signer https://signer.example.com\n"
+            "\n"
+            "  # PymtHouse / Dashboard facade auth (OIDC device login + signer exchange)\n"
+            "  python examples/get_orchestrator_info.py --discovery-url https://discover.example.com/orchestrators \\\n"
+            "      --billing-url https://pymthouse.com --client-id app_xxxxxxxx\n"
             "\n"
             "  # JSON / JSONL output\n"
             "  python examples/get_orchestrator_info.py localhost:8935 --format json\n"
@@ -46,11 +55,6 @@ def _parse_args() -> argparse.Namespace:
         help="Optional list of orchestrators (host:port) or comma-delimited string.",
     )
     p.add_argument(
-        "--discovery",
-        default=None,
-        help="Explicit discovery endpoint URL (overrides signer discovery).",
-    )
-    p.add_argument(
         "--signer",
         default=None,
         help="Remote signer base URL (no path). Can be combined with list/discovery.",
@@ -60,6 +64,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Base64-encoded gateway token; token fields override explicit signer/discovery/orchestrator args.",
     )
+    add_facade_args(p)
     p.add_argument(
         "--debug",
         action="store_true",
@@ -336,15 +341,34 @@ def _resolve_discovery_args(args: argparse.Namespace) -> tuple[Any, str | None, 
 
     signer = token_data.get("signer") if token_data else None
     if signer is None:
-        signer = args.signer
+        signer = resolve_signer_url(args)
 
     signer_headers = token_data.get("signer_headers") if token_data else None
 
     discovery = token_data.get("discovery") if token_data else None
     if discovery is None:
-        discovery = args.discovery
+        discovery = args.discovery_url
 
     discovery_headers = token_data.get("discovery_headers") if token_data else None
+
+    # PymtHouse / Dashboard facade auth: when a billing origin + issuer are configured
+    # and no signer bearer was supplied via --token, run OIDC device login + dashboard
+    # device exchange to mint signer (and discovery) Authorization headers.
+    issuer = resolve_issuer_url(args.billing_url, os.environ.get("LIVEPEER_OIDC_ISSUER_URL"))
+    has_signer_bearer = bool(signer_headers and signer_headers.get("Authorization"))
+    if args.billing_url and issuer and not has_signer_bearer:
+        signer, signer_headers, discovery, discovery_headers = resolve_signer_auth(
+            billing_url=args.billing_url,
+            issuer_url=issuer,
+            signer_url=signer,
+            signer_headers=signer_headers,
+            discovery_url=discovery,
+            discovery_headers=discovery_headers,
+            oidc_client_id=args.client_id,
+            scope="sign:job",
+            headless=not args.browser,
+            clear_token_cache=args.clear_token_cache,
+        )
 
     return orchestrators, signer, signer_headers, discovery, discovery_headers
 
@@ -384,6 +408,7 @@ def main() -> None:
             signer_headers=signer_headers,
             discovery_url=discovery,
             discovery_headers=discovery_headers,
+            timeout=args.discovery_timeout,
         )
 
         for orch_url in orch_list:
