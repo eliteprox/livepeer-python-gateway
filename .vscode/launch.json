@@ -2,6 +2,34 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "write_frames (prod)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
+                "--billing-url",
+                "https://pymthouse.com",
+                "--client-id",
+                "app_c5335e635593432ca975877a",
+                "--signer",
+                "https://pymthouse-production.up.railway.app",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000",
+                // "--debug",
+                // "--clear-token-cache",
+
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "write_frames (staging)",
             "type": "debugpy",
             "request": "launch",
@@ -23,6 +51,9 @@
                 // "--clear-token-cache",
 
             ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
             "console": "integratedTerminal",
             "justMyCode": true
         },
@@ -32,7 +63,7 @@
             // not staging.pymthouse.com. Run the dashboard locally first: `pnpm dev`
             // in repos/dashboard (serves :3000). signerUrl comes back from the exchange,
             // so --signer is omitted; --discovery is still required.
-            "name": "write_frames (API key)",
+            "name": "write_frames (staging API key)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/examples/write_frames.py",
@@ -44,13 +75,17 @@
                 "--client-id",
                 "app_bf4a4dd275594713afe37052",
                 "--api-key",
-                "",
+                // "pmth_4f89815a5066bde971e5bd56839507efc71c67d24f67093d74aad108dc3091c6",
+                "pmth_ba23477a00d29105acdd3d4e575ffdfdd375eab8867b97391297b0ac8b087e9a",
                 "--model",
                 "streamdiffusion-sdxl",
                 "--count",
                 "900000",
                 // "--debug"
             ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
             "console": "integratedTerminal",
             "justMyCode": true
         }
