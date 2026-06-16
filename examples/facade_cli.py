@@ -52,6 +52,15 @@ def add_facade_args(parser: argparse.ArgumentParser, *, dev_defaults: bool = Fal
         help="Use browser PKCE login instead of RFC 8628 device flow",
     )
     parser.add_argument(
+        "--api-key",
+        default=os.environ.get("LIVEPEER_API_KEY") or os.environ.get("PMTH_API_KEY"),
+        dest="api_key",
+        help=(
+            "PymtHouse API key (pmth_*) for non-interactive bearer exchange instead "
+            "of OIDC browser/device login (env: LIVEPEER_API_KEY / PMTH_API_KEY)"
+        ),
+    )
+    parser.add_argument(
         "--clear-token-cache",
         action="store_true",
         help="Delete cached OIDC device-login tokens for this issuer/client before login",
@@ -102,6 +111,9 @@ def facade_start_lv2v_kwargs(
     }
     if getattr(args, "clear_token_cache", False):
         kwargs["clear_token_cache"] = True
+    api_key = getattr(args, "api_key", None)
+    if api_key:
+        kwargs["api_key"] = api_key
     signer = resolve_signer_url(args, signer_attr=signer_attr)
     if signer:
         kwargs["signer_url"] = signer

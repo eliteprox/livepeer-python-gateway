@@ -7,6 +7,7 @@ import pytest
 from livepeer_gateway.auth_resolve import (
     SignerAuthRefreshContext,
     _extract_signer_access_token,
+    exchange_api_key_via_dashboard,
     exchange_device_token_via_dashboard,
     refresh_signer_credentials,
     resolve_issuer_url,
@@ -65,6 +66,92 @@ def test_exchange_device_token_missing_token_raises() -> None:
         post_json.return_value = {"identity": {}}
         with pytest.raises(LivepeerGatewayError, match="missing signer access token"):
             exchange_device_token_via_dashboard("http://localhost:3001", "x")
+
+
+def test_exchange_api_key_via_dashboard() -> None:
+    with patch("livepeer_gateway.auth_resolve.post_json_sync") as post_json:
+        post_json.return_value = {
+            "access_token": "signer-jwt",
+            "token_type": "Bearer",
+            "signerUrl": "http://127.0.0.1:8080",
+        }
+        payload = exchange_api_key_via_dashboard(
+            "http://localhost:3001",
+            "pmth_secret",
+            scope="sign:job",
+            client_id="app_demo",
+        )
+    assert _extract_signer_access_token(payload) == "signer-jwt"
+    assert payload["signerUrl"] == "http://127.0.0.1:8080"
+    post_json.assert_called_once()
+    url = post_json.call_args[0][0]
+    body = post_json.call_args[0][1]
+    assert url == "http://localhost:3001/api/pymthouse/keys/exchange"
+    assert body == {"apiKey": "pmth_secret", "scope": "sign:job", "clientId": "app_demo"}
+
+
+def test_exchange_api_key_omits_client_id_when_absent() -> None:
+    with patch("livepeer_gateway.auth_resolve.post_json_sync") as post_json:
+        post_json.return_value = {"access_token": "signer-jwt"}
+        exchange_api_key_via_dashboard("http://localhost:3001", "pmth_secret")
+    body = post_json.call_args[0][1]
+    assert body == {"apiKey": "pmth_secret"}
+
+
+def test_exchange_api_key_missing_token_raises() -> None:
+    with patch("livepeer_gateway.auth_resolve.post_json_sync") as post_json:
+        post_json.return_value = {"error": "nope"}
+        with pytest.raises(LivepeerGatewayError, match="missing signer access token"):
+            exchange_api_key_via_dashboard("http://localhost:3001", "pmth_secret")
+
+
+def test_resolve_signer_auth_uses_api_key_exchange() -> None:
+    with (
+        patch(
+            "livepeer_gateway.auth_resolve.exchange_api_key_via_dashboard",
+            return_value={
+                "access_token": "signer-access",
+                "signerUrl": "http://127.0.0.1:8080",
+            },
+        ) as api_exchange,
+        patch("livepeer_gateway.oidc_auth.ensure_valid_token") as ensure_valid,
+        patch(
+            "livepeer_gateway.auth_resolve.exchange_device_token_via_dashboard",
+        ) as device_exchange,
+    ):
+        signer_url, signer_headers, _, _ = resolve_signer_auth(
+            billing_url="http://localhost:3001",
+            oidc_client_id="app_demo",
+            api_key="pmth_secret",
+        )
+
+    ensure_valid.assert_not_called()
+    device_exchange.assert_not_called()
+    api_exchange.assert_called_once_with(
+        "http://localhost:3001",
+        "pmth_secret",
+        scope="sign:job",
+        client_id="app_demo",
+    )
+    assert signer_url == "http://127.0.0.1:8080"
+    assert signer_headers == {"Authorization": "Bearer signer-access"}
+
+
+def test_refresh_signer_credentials_uses_api_key() -> None:
+    ctx = SignerAuthRefreshContext(
+        billing_url="http://localhost:3001",
+        signer_url="http://127.0.0.1:8080",
+        oidc_client_id="app_demo",
+        api_key="pmth_secret",
+    )
+    with patch(
+        "livepeer_gateway.auth_resolve.resolve_signer_auth",
+        return_value=("http://127.0.0.1:8080", {"Authorization": "Bearer new"}, None, None),
+    ) as resolve:
+        headers = refresh_signer_credentials(ctx)
+    assert headers["Authorization"] == "Bearer new"
+    assert resolve.call_args.kwargs["api_key"] == "pmth_secret"
+    assert resolve.call_args.kwargs["signer_headers"] is None
 
 
 def test_resolve_signer_auth_skips_when_bearer_present() -> None:

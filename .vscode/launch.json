@@ -12,18 +12,45 @@
                 "--billing-url",
                 "https://staging.pymthouse.com",
                 "--client-id",
-                "app_13fc28fef4ecb73fb8231c52",
+                "app_bf4a4dd275594713afe37052",
                 "--signer",
                 "https://pymthouse-preview.up.railway.app",
                 "--model",
                 "streamdiffusion-sdxl",
                 "--count",
                 "900000",
-                "--debug"
+                // "--debug",
+                // "--clear-token-cache",
+
             ],
-            "env": {
-                "LOG_LEVEL": "DEBUG"
-            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            // Non-interactive API-key login. --billing-url must point at the Dashboard
+            // app (which hosts /api/pymthouse/keys/exchange and holds the M2M secret),
+            // not staging.pymthouse.com. Run the dashboard locally first: `pnpm dev`
+            // in repos/dashboard (serves :3000). signerUrl comes back from the exchange,
+            // so --signer is omitted; --discovery is still required.
+            "name": "write_frames (API key)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
+                "--billing-url",
+                "http://localhost:3000",
+                "--client-id",
+                "app_bf4a4dd275594713afe37052",
+                "--api-key",
+                "",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000",
+                // "--debug"
+            ],
             "console": "integratedTerminal",
             "justMyCode": true
         }

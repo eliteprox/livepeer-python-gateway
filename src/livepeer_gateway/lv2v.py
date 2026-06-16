@@ -263,6 +263,7 @@ def start_lv2v(
     headless: bool = True,
     on_device_auth: Optional[Callable[[str, str, int], None]] = None,
     clear_token_cache: bool = False,
+    api_key: Optional[str] = None,
     control_config: Optional[ControlConfig] = None,
     use_tofu: bool = True,
     timeout: float = 5.0,
@@ -285,9 +286,12 @@ def start_lv2v(
     (``billing_url``, ``issuer_url``, ``oidc_client_id``), explicit keyword
     arguments take precedence over token values.
 
-    When ``billing_url`` and ``issuer_url`` are set (or present in the token)
-    and no signer bearer is supplied, the SDK performs OIDC device login and
-    exchanges the user access token via ``POST {billing_url}/api/signer/device/exchange``.
+    When ``billing_url`` is set (or present in the token) and no signer bearer is
+    supplied, the SDK obtains a user access token and exchanges it for a signer JWT
+    via ``POST {billing_url}/api/signer/device/exchange``. The user token comes from
+    either ``api_key`` (non-interactive PymtHouse API-key exchange) or, when no
+    ``api_key`` is given, interactive OIDC browser/device login (requires
+    ``issuer_url``). Either method also drives mid-stream signer credential refresh.
 
     Orchestrator selection/discovery precedence (highest -> lowest):
     1) token ``orchestrators`` value
@@ -375,13 +379,14 @@ def start_lv2v(
         headless=headless,
         on_device_auth=on_device_auth,
         clear_token_cache=clear_token_cache,
+        api_key=api_key,
     )
 
     signer_auth_refresh: Optional[SignerAuthRefreshContext] = None
     if (
         resolved_billing_url
-        and resolved_issuer_url
         and not had_explicit_signer_bearer
+        and (api_key or resolved_issuer_url)
     ):
         signer_auth_refresh = SignerAuthRefreshContext(
             billing_url=resolved_billing_url,
@@ -391,6 +396,7 @@ def start_lv2v(
             oidc_scopes=resolved_oidc_scopes,
             scope=scope,
             headless=headless,
+            api_key=api_key,
         )
 
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
