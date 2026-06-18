@@ -103,9 +103,17 @@ job = start_lv2v(
 | `signer_headers` | `{"key": "value"}` (optional) | Extra HTTP headers sent to all signer endpoints |
 | `discovery` | `string` (optional) | Discovery endpoint URL |
 | `discovery_headers` | `{"key": "value"}` (optional) | Extra HTTP headers sent to the discovery endpoint |
+| `billing` | `string` (optional) | Billing app origin for PymtHouse API-key exchange (e.g. `http://localhost:3000`) |
+| `api_key` | `string` (optional) | PymtHouse `pmth_*` key; exchanged for a signer JWT when `billing` is set |
 
 Token values take precedence over explicit keyword arguments.
 Explicit keyword arguments are used only for fields missing in the token.
+
+When `signer_headers.Authorization` is `Bearer pmth_*`, the SDK treats it as a
+PymtHouse API key (not a signer JWT), infers `billing` from the discovery URL
+origin when omitted, and exchanges via `POST {billing}/api/pymthouse/keys/exchange`
+before calling the signer DMZ. NaaP and Dashboard token bundles can use either
+`signer` + `signer_headers` or explicit `billing` + `api_key`.
 
 For token payloads, `orchestrators` must be a JSON array of non-empty strings.
 Comma-delimited string format is not supported in the token.

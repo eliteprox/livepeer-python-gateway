@@ -22,6 +22,12 @@ from .media_publish import MediaPublish, MediaPublishConfig
 from .orchestrator import _http_origin, post_json
 from .selection import orchestrator_selector
 from .remote_signer import PaymentSession
+from .auth_resolve import (
+    SignerAuthRefreshContext,
+    billing_origin_from_discovery_url,
+    extract_pmth_api_key_from_signer_headers,
+    resolve_signer_auth,
+)
 from .token import parse_token
 from .trickle_subscriber import TrickleSubscriber
 
@@ -318,6 +324,39 @@ def start_lv2v(
     if resolved_discovery_headers is None:
         resolved_discovery_headers = discovery_headers
 
+    resolved_billing_url = token_data.get("billing") if token_data else None
+    resolved_api_key = token_data.get("api_key") if token_data else None
+
+    pmth_key = extract_pmth_api_key_from_signer_headers(resolved_signer_headers)
+    if pmth_key:
+        resolved_api_key = pmth_key
+        resolved_signer_headers = None
+
+    if not resolved_billing_url:
+        resolved_billing_url = billing_origin_from_discovery_url(resolved_discovery_url)
+
+    (
+        resolved_signer_url,
+        resolved_signer_headers,
+        resolved_discovery_url,
+        resolved_discovery_headers,
+    ) = resolve_signer_auth(
+        billing_url=resolved_billing_url,
+        signer_url=resolved_signer_url,
+        signer_headers=resolved_signer_headers,
+        discovery_url=resolved_discovery_url,
+        discovery_headers=resolved_discovery_headers,
+        api_key=resolved_api_key,
+    )
+
+    signer_auth_refresh: Optional[SignerAuthRefreshContext] = None
+    if resolved_api_key and resolved_billing_url:
+        signer_auth_refresh = SignerAuthRefreshContext(
+            billing_url=resolved_billing_url,
+            signer_url=resolved_signer_url,
+            api_key=resolved_api_key,
+        )
+
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
     # Orchestrator discovery precedence after token-first field resolution:
     # token orchestrators -> explicit orch_url -> token discovery ->
@@ -355,6 +394,7 @@ def start_lv2v(
                 type="lv2v",
                 capabilities=capabilities,
                 use_tofu=use_tofu,
+                signer_auth_refresh=signer_auth_refresh,
             )
             p = session.get_payment()
             headers: dict[str, str] = {

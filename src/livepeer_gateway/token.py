@@ -53,10 +53,21 @@ def parse_token(token: str) -> dict[str, Any]:
                 )
             normalized_orchestrators.append(item.strip())
 
+    billing = payload.get("billing") or payload.get("billing_url")
+    api_key = payload.get("api_key")
+    for label, value in (
+        ("billing", billing),
+        ("api_key", api_key),
+    ):
+        if value is not None and not isinstance(value, str):
+            raise LivepeerGatewayError(f"Invalid token: {label} must be a string")
+
     return {
         "orchestrators": normalized_orchestrators,
         "signer": signer,
         "discovery": discovery,
         "signer_headers": signer_headers,
         "discovery_headers": discovery_headers,
+        "billing": billing.strip() if isinstance(billing, str) else None,
+        "api_key": api_key.strip() if isinstance(api_key, str) else None,
     }

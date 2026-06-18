@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "write_frames (local orchestrator)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "ai.eliteencoder.net:8935",
+                "--signer",
+                "https://pymthouse-preview.up.railway.app",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "90"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "write_frames (token auth)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--token",
+                "REPLACE_WITH_BASE64_TOKEN",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "900000"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

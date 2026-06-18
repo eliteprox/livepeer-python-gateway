@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 
 from . import lp_rpc_pb2
 from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired, SkipPaymentCycle
+from .auth_resolve import SignerAuthRefreshContext, refresh_signer_credentials
+from .signer_bearer import should_refresh_signer_bearer
 _LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -166,6 +168,7 @@ class PaymentSession:
         capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
         use_tofu: bool = True,
         max_refresh_retries: int = 3,
+        signer_auth_refresh: Optional[SignerAuthRefreshContext] = None,
     ) -> None:
         self._signer_url = signer_url
         self._signer_headers = signer_headers
@@ -175,7 +178,15 @@ class PaymentSession:
         self._capabilities = capabilities
         self._use_tofu = use_tofu
         self._max_refresh_retries = max(0, int(max_refresh_retries))
+        self._signer_auth_refresh = signer_auth_refresh
         self._state: Optional[dict[str, str]] = None
+
+    def _maybe_refresh_signer_headers(self) -> None:
+        if self._signer_auth_refresh is None:
+            return
+        if not should_refresh_signer_bearer(self._signer_headers):
+            return
+        self._signer_headers = refresh_signer_credentials(self._signer_auth_refresh)
 
     def set_manifest_id(self, manifest_id: str) -> None:
         if not isinstance(manifest_id, str) or not manifest_id.strip():
@@ -191,6 +202,7 @@ class PaymentSession:
         (up to max_refresh_retries).
         Returns payment + seg_creds for use as HTTP headers.
         """
+        self._maybe_refresh_signer_headers()
 
         # Offchain mode: still send the expected headers, but with empty content.
         if not self._signer_url:
