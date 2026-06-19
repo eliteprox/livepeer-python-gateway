@@ -85,6 +85,21 @@ def test_resolve_signer_auth_passes_through_jwt_headers():
     assert headers == jwt_headers
 
 
+def test_resolve_signer_auth_passes_through_pmth_headers_without_billing():
+    pmth_headers = {"Authorization": "Bearer pmth_abc123"}
+    signer_url, headers, discovery_url, discovery_headers = resolve_signer_auth(
+        billing_url=None,
+        signer_url="https://signer.example",
+        signer_headers=pmth_headers,
+        discovery_url="https://discovery.example/raw",
+        discovery_headers=None,
+    )
+    assert signer_url == "https://signer.example"
+    assert headers == pmth_headers
+    assert discovery_url == "https://discovery.example/raw"
+    assert discovery_headers is None
+
+
 @patch("livepeer_gateway.orchestrator.post_json")
 def test_refresh_signer_credentials(mock_post_json):
     mock_post_json.return_value = {

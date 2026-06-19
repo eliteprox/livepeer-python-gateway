@@ -24,7 +24,6 @@ from .selection import orchestrator_selector
 from .remote_signer import PaymentSession
 from .auth_resolve import (
     SignerAuthRefreshContext,
-    billing_origin_from_discovery_url,
     extract_pmth_api_key_from_signer_headers,
     resolve_signer_auth,
 )
@@ -328,12 +327,9 @@ def start_lv2v(
     resolved_api_key = token_data.get("api_key") if token_data else None
 
     pmth_key = extract_pmth_api_key_from_signer_headers(resolved_signer_headers)
-    if pmth_key:
-        resolved_api_key = pmth_key
+    if pmth_key and resolved_billing_url:
+        resolved_api_key = resolved_api_key or pmth_key
         resolved_signer_headers = None
-
-    if not resolved_billing_url:
-        resolved_billing_url = billing_origin_from_discovery_url(resolved_discovery_url)
 
     (
         resolved_signer_url,
