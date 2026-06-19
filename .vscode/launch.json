@@ -36,6 +36,25 @@
             },
             "console": "integratedTerminal",
             "justMyCode": true
+        },
+        {
+            "name": "write_frames (local clearinghouse)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--token",
+                "REPLACE_WITH_BASE64_TOKEN",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "90"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
         }
     ]
 }
