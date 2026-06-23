@@ -83,6 +83,8 @@ async def main() -> None:
                 args.api_key,
                 client_id=args.client_id,
             )
+        elif args.api_key and args.signer:
+            signer_headers = {"Authorization": f"Bearer {args.api_key.strip()}"}
 
         job = start_lv2v(
             args.orchestrator,
