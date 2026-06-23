@@ -7,12 +7,18 @@ import re
 import ssl
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from . import lp_rpc_pb2
-from .errors import LivepeerGatewayError, PaymentError, SignerRefreshRequired, SkipPaymentCycle
+from .errors import (
+    LivepeerGatewayError,
+    PaymentError,
+    SignerAuthExpired,
+    SignerRefreshRequired,
+    SkipPaymentCycle,
+)
 _LOG = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
@@ -45,6 +51,22 @@ class RemoteSignerError(LivepeerGatewayError):
 
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
+
+
+def _is_signer_auth_error(exc: BaseException) -> bool:
+    """Heuristic: did the signer reject the request due to an expired/invalid token?
+
+    The signer (or PymtHouse in front of it) returns 401/403 for a bad bearer,
+    and a 502 carrying a JWT validation message (e.g. ``"exp" claim ...
+    expiration is past current timestamp``) when the session token has expired.
+    """
+    cause = getattr(exc, "__cause__", None) or exc
+    if isinstance(cause, HTTPError) and cause.code in (401, 403):
+        return True
+    text = str(exc).lower()
+    if "expired" in text or "expiration is past" in text:
+        return True
+    return '"exp"' in text and "claim" in text
 
 
 def _freeze_headers(
@@ -166,6 +188,7 @@ class PaymentSession:
         capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
         use_tofu: bool = True,
         max_refresh_retries: int = 3,
+        refresh_signer_headers: Optional[Callable[[], dict[str, str]]] = None,
     ) -> None:
         self._signer_url = signer_url
         self._signer_headers = signer_headers
@@ -175,6 +198,9 @@ class PaymentSession:
         self._capabilities = capabilities
         self._use_tofu = use_tofu
         self._max_refresh_retries = max(0, int(max_refresh_retries))
+        # Callback that re-mints signer auth headers when the session JWT
+        # expires mid-stream (see SignerTokenProvider.refresh).
+        self._refresh_signer_headers = refresh_signer_headers
         self._state: Optional[dict[str, str]] = None
 
     def set_manifest_id(self, manifest_id: str) -> None:
@@ -224,7 +250,14 @@ class PaymentSession:
             if self._state is not None:
                 payload["state"] = self._state
 
-            data = post_json(url, payload, headers=self._signer_headers)
+            try:
+                data = post_json(url, payload, headers=self._signer_headers)
+            except (SignerRefreshRequired, SkipPaymentCycle):
+                raise
+            except LivepeerGatewayError as e:
+                if self._refresh_signer_headers is not None and _is_signer_auth_error(e):
+                    raise SignerAuthExpired(str(e)) from e
+                raise
             payment = data.get("payment")
             if not isinstance(payment, str) or not payment:
                 raise PaymentError(
@@ -247,9 +280,24 @@ class PaymentSession:
             return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
 
         attempts = 0
+        auth_attempts = 0
         while True:
             try:
                 return _payment_request()
+            except SignerAuthExpired as e:
+                if (
+                    self._refresh_signer_headers is None
+                    or auth_attempts >= self._max_refresh_retries
+                ):
+                    raise PaymentError(
+                        f"Signer auth expired and could not be refreshed "
+                        f"after {auth_attempts} retries: {e}"
+                    ) from e
+                _LOG.info("Signer token expired; re-minting signer auth headers")
+                new_headers = self._refresh_signer_headers()
+                if new_headers:
+                    self._signer_headers = dict(new_headers)
+                auth_attempts += 1
             except SignerRefreshRequired as e:
                 if attempts >= self._max_refresh_retries:
                     raise PaymentError(
