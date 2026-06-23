@@ -4,7 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
-from livepeer_gateway.auth_exchange import exchange_api_key_for_signer
+from livepeer_gateway.auth_exchange import (
+    SignerTokenProvider,
+    exchange_api_key_for_signer,
+)
 from livepeer_gateway.errors import LivepeerGatewayError
 
 
@@ -42,3 +45,24 @@ def test_exchange_api_key_for_signer_requires_access_token() -> None:
     with patch("livepeer_gateway.auth_exchange.post_json", return_value={}):
         with pytest.raises(LivepeerGatewayError, match="missing signer access token"):
             exchange_api_key_for_signer("https://dashboard.example.com", "pmth_test")
+
+
+def test_signer_token_provider_refresh_remints_headers() -> None:
+    payloads = [
+        {"token": {"accessToken": "jwt1"}, "signerUrl": "https://signer.example"},
+        {"token": {"accessToken": "jwt2"}, "signerUrl": "https://signer.example"},
+    ]
+    with patch("livepeer_gateway.auth_exchange.post_json", side_effect=payloads):
+        provider = SignerTokenProvider(
+            "https://dashboard.example.com",
+            "pmth_test",
+            client_id="app_test",
+        )
+        first = provider.refresh()
+        assert first == {"Authorization": "Bearer jwt1"}
+        assert provider.signer_url == "https://signer.example"
+        assert provider.headers == first
+
+        second = provider.refresh()
+        assert second == {"Authorization": "Bearer jwt2"}
+        assert provider.headers == second

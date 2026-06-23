@@ -4,7 +4,7 @@ from fractions import Fraction
 
 import av
 
-from livepeer_gateway.auth_exchange import exchange_api_key_for_signer
+from livepeer_gateway.auth_exchange import SignerTokenProvider
 from livepeer_gateway.errors import LivepeerGatewayError
 from livepeer_gateway.lv2v import StartJobRequest, start_lv2v
 from livepeer_gateway.media_publish import MediaPublishConfig, VideoOutputConfig
@@ -77,12 +77,18 @@ async def main() -> None:
     try:
         signer_url = args.signer
         signer_headers = None
+        # Re-mints the signer JWT when it expires mid-stream; long runs
+        # (--count) outlive the short-lived sign:job token without this.
+        refresh_signer_headers = None
         if args.api_key and args.billing_url:
-            signer_url, signer_headers = exchange_api_key_for_signer(
+            provider = SignerTokenProvider(
                 args.billing_url,
                 args.api_key,
                 client_id=args.client_id,
             )
+            signer_headers = provider.refresh()
+            signer_url = provider.signer_url
+            refresh_signer_headers = provider.refresh
         elif args.api_key and args.signer:
             signer_headers = {"Authorization": f"Bearer {args.api_key.strip()}"}
 
@@ -92,6 +98,7 @@ async def main() -> None:
             token=args.token,
             signer_url=signer_url,
             signer_headers=signer_headers,
+            refresh_signer_headers=refresh_signer_headers,
             discovery_url=args.discovery,
             discovery_headers=signer_headers,
         )

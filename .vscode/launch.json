@@ -2,6 +2,29 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "write_frames (clearinghouse local signer)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                "--signer",
+                "http://localhost:8081",
+                "--api-key",
+                "sk_demo_local_key",
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
+                "--model",
+                "streamdiffusion-sdxl",
+                "--count",
+                "90000"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "write_frames (API key - vercel dashboard)",
             "type": "debugpy",
             "request": "launch",
@@ -10,18 +33,18 @@
                 "--discovery",
                 "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw?serviceType=legacy",
                 "--billing-url",
-                "https://dashboard-66b39eyog-livepeer-foundation.vercel.app",
+                "http://localhost:3000",
                 "--client-id",
-                "app_c5335e635593432ca975877a",
+                "app_bf4a4dd275594713afe37052",
                 "--api-key",
-                "YOUR_API_KEY_HERE",
+                "pmth_API_KEY_HERE",
                 "--model",
                 "streamdiffusion-sdxl",
                 "--count",
                 "900000"
             ],
             "env": {
-                "LOG_LEVEL": "DEBUG"
+                "LOG_LEVEL": "INFO"
             },
             "console": "integratedTerminal",
             "justMyCode": true

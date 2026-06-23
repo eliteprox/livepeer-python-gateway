@@ -57,3 +57,42 @@ def exchange_api_key_for_signer(
     _LOG.info("Exchanging API key for signer JWT at %s", url)
     data = post_json(url, body, timeout=timeout)
     return _signer_url(data), {"Authorization": f"Bearer {_signer_access_token(data)}"}
+
+
+class SignerTokenProvider:
+    """Re-exchangeable source of signer auth headers.
+
+    The signer session JWT minted by :func:`exchange_api_key_for_signer` is
+    short-lived (``sign:job`` scope, typically minutes). Long-running streams
+    must re-mint it when the signer rejects an expired token. Pass
+    :meth:`refresh` as ``refresh_signer_headers`` to a ``PaymentSession`` (or
+    ``start_lv2v``) so the payment loop can recover transparently.
+    """
+
+    def __init__(
+        self,
+        billing_url: str,
+        api_key: str,
+        *,
+        client_id: Optional[str] = None,
+        scope: Optional[str] = DEFAULT_SCOPE,
+        timeout: float = 15.0,
+    ) -> None:
+        self._billing_url = billing_url
+        self._api_key = api_key
+        self._client_id = client_id
+        self._scope = scope
+        self._timeout = timeout
+        self.signer_url: Optional[str] = None
+        self.headers: dict[str, str] = {}
+
+    def refresh(self) -> dict[str, str]:
+        """Re-exchange the API key and return freshly minted auth headers."""
+        self.signer_url, self.headers = exchange_api_key_for_signer(
+            self._billing_url,
+            self._api_key,
+            client_id=self._client_id,
+            scope=self._scope,
+            timeout=self._timeout,
+        )
+        return self.headers

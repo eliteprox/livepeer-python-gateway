@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from . import lp_rpc_pb2
 from .capabilities import CapabilityId, build_capabilities
@@ -252,6 +252,7 @@ def start_lv2v(
     token: Optional[str] = None,
     signer_url: Optional[str] = None,
     signer_headers: Optional[dict[str, str]] = None,
+    refresh_signer_headers: Optional[Callable[[], dict[str, str]]] = None,
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
     control_config: Optional[ControlConfig] = None,
@@ -352,6 +353,7 @@ def start_lv2v(
                 resolved_signer_url,
                 info,
                 signer_headers=resolved_signer_headers,
+                refresh_signer_headers=refresh_signer_headers,
                 type="lv2v",
                 capabilities=capabilities,
                 use_tofu=use_tofu,

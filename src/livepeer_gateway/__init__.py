@@ -1,4 +1,4 @@
-from .auth_exchange import exchange_api_key_for_signer
+from .auth_exchange import SignerTokenProvider, exchange_api_key_for_signer
 from .capabilities import CapabilityId, build_capabilities
 from .channel_reader import ChannelReader, JSONLReader
 from .channel_writer import ChannelWriter, JSONLWriter
@@ -83,6 +83,7 @@ __all__ = [
     "JSONLWriter",
     "Events",
     "exchange_api_key_for_signer",
+    "SignerTokenProvider",
     "PaymentSession",
     "parse_token",
     "SelectionCursor",
