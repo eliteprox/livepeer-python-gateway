@@ -271,12 +271,14 @@ async def reserve_session(
     signer_headers: Optional[dict[str, str]] = None,
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
+    orchestrators: Optional[Sequence[str] | str] = None,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
     timeout: float = 5.0,
     payment_interval: float = 3.0,
 ) -> LiveRunnerSession:
     cursor = await runner_selector(
+        orchestrators=orchestrators,
         signer_url=signer_url,
         signer_headers=signer_headers,
         discovery_url=discovery_url,
