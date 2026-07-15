@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 import aiohttp
 
 from .errors import (
+    InsufficientBalance,
     LivepeerHTTPError,
     LivepeerGatewayError,
     SignerRefreshRequired,
@@ -123,6 +124,10 @@ def _raise_http_json_error(
         raise SkipPaymentCycle(
             f"Signer returned HTTP 482 (skip payment cycle) (url={url}){body_part}"
         )
+    if status == 483:
+        raise InsufficientBalance(
+            f"Signer returned HTTP 483 (insufficient balance) (url={url}){body_part}"
+        )
     raise LivepeerHTTPError(
         status,
         url,
@@ -184,6 +189,10 @@ def request_json_sync(
         if e.code == 482:
             raise SkipPaymentCycle(
                 f"Signer returned HTTP 482 (skip payment cycle) (url={url}){body_part}"
+            ) from e
+        if e.code == 483:
+            raise InsufficientBalance(
+                f"Signer returned HTTP 483 (insufficient balance) (url={url}){body_part}"
             ) from e
         raise LivepeerHTTPError(
             e.code,

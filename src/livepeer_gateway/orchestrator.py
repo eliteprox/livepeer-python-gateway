@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .discovery import _append_caps, discover_orchestrators
 from .errors import (
+    InsufficientBalance,
     LivepeerGatewayError,
     SignerRefreshRequired,
     SkipPaymentCycle,
@@ -26,6 +27,7 @@ post_json = post_json_sync
 get_json = get_json_sync
 
 __all__ = [
+    "InsufficientBalance",
     "LivepeerGatewayError",
     "SignerRefreshRequired",
     "SkipPaymentCycle",
