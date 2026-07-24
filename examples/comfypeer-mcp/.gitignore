@@ -1,0 +1,6 @@
+# ComfyPeer MCP local artifacts
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/

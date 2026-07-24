@@ -280,14 +280,15 @@ def start_lv2v(
     payments can be started later via ``job.start_payment_sender()``.
 
     Optional ``token`` can be provided as a base64-encoded JSON object.
-    Token values take precedence over explicit keyword arguments.
-    Explicit keyword arguments are used only for fields missing in the token.
+    Token values take precedence over explicit keyword arguments for signer,
+    signer headers, orchestrators, and discovery headers. Explicit
+    ``discovery_url`` overrides token ``discovery``.
 
     Orchestrator selection/discovery precedence (highest -> lowest):
     1) token ``orchestrators`` value
     2) explicit ``orch_url`` list
-    3) token ``discovery`` value
-    4) explicit ``discovery_url`` argument
+    3) explicit ``discovery_url`` argument
+    4) token ``discovery`` value
     5) remote signer discovery endpoint derived from the resolved signer URL
 
     ``timeout`` controls only the initial HTTP POST to
@@ -320,18 +321,18 @@ def start_lv2v(
     if resolved_signer_headers is None:
         resolved_signer_headers = signer_headers
 
-    resolved_discovery_url = token_data.get("discovery") if token_data else None
-    if resolved_discovery_url is None:
-        resolved_discovery_url = discovery_url
+    resolved_discovery_url = discovery_url
+    if resolved_discovery_url is None and token_data:
+        resolved_discovery_url = token_data.get("discovery")
 
     resolved_discovery_headers = token_data.get("discovery_headers") if token_data else None
     if resolved_discovery_headers is None:
         resolved_discovery_headers = discovery_headers
 
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
-    # Orchestrator discovery precedence after token-first field resolution:
-    # token orchestrators -> explicit orch_url -> token discovery ->
-    # explicit discovery_url -> signer_url
+    # Orchestrator discovery precedence after field resolution:
+    # token orchestrators -> explicit orch_url -> explicit discovery_url ->
+    # token discovery -> signer_url
     cursor = orchestrator_selector(
         resolved_orch_url,
         signer_url=resolved_signer_url,

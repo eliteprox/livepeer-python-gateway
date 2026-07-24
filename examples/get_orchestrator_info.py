@@ -49,7 +49,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--discovery",
         default=None,
-        help="Explicit discovery endpoint URL (overrides signer discovery).",
+        help="Explicit discovery endpoint URL (overrides token discovery and signer discovery).",
     )
     p.add_argument(
         "--signer",
@@ -59,7 +59,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--token",
         default=None,
-        help="Base64-encoded gateway token; token fields override explicit signer/discovery/orchestrator args.",
+        help="Base64-encoded gateway token; token fields override explicit signer/orchestrator args; --discovery overrides token discovery.",
     )
     p.add_argument(
         "--debug",
@@ -341,9 +341,9 @@ def _resolve_discovery_args(args: argparse.Namespace) -> tuple[Any, str | None, 
 
     signer_headers = token_data.get("signer_headers") if token_data else None
 
-    discovery = token_data.get("discovery") if token_data else None
-    if discovery is None:
-        discovery = args.discovery
+    discovery = args.discovery
+    if discovery is None and token_data:
+        discovery = token_data.get("discovery")
 
     discovery_headers = token_data.get("discovery_headers") if token_data else None
 

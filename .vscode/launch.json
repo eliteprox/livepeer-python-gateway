@@ -1,0 +1,247 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "get orchestrator info (ai.chasemedia.io:8935)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/get_orchestrator_info.py",
+            "args": [
+                // "ai.chasemedia.io:8935",
+                // "ai-mdw.eliteencoder.net:8936",
+                "--token",
+                "",
+                "--debug"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "write_frames (token example)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                // "ai.chasemedia.io:8935",
+                "--token",
+                "eyJzaWduZXIiOiJodHRwczovL3B5bXRob3VzZS1wcmV2aWV3LnVwLnJhaWx3YXkuYXBwIiwic2lnbmVyX2hlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBhcHBfZGQ0Njg2MDA0MDY0MDlhNDAzYTgyOTUyX3BtdGhfNDIwZGMwODk1YmI1MGIxZDMxNTRkYzdhMzI1NzI3NmVkMzk3YjZiYTAwYmYxMGM4NzkwOTVlNzA5ZGE3Y2I4NCJ9LCJkaXNjb3ZlcnkiOiJodHRwczovL2Rpc2NvdmVyeS1zZXJ2aWNlLXByb2R1Y3Rpb24tODk1NS51cC5yYWlsd2F5LmFwcC92MS9kaXNjb3ZlcnkvcmF3In0=",
+                "--model",
+                "streamdiffusion-sdxl-v2v",
+                "--count",
+                "9000000"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "live-runner / hello-world",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/../live-runner-example-apps/hello-world/client.py",
+            "cwd": "${workspaceFolder}/../live-runner-example-apps/hello-world",
+            "args": [
+                "--discovery",
+                "https://kiloutcorp.link:11111/discovery",
+                "--signer",
+                "https://pymthouse-production.up.railway.app/",
+                "--api-key",
+                "app_7d0ce220153809a19338a6e4_pmth_21c9c1b8f325fbc0dfe5515b623c314458d67515af69ad9b781dcdf9713b22a1",
+                "--name",
+                "livepeer"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO",
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "transcode batch (transcode/ffmpeg @ discovery-service)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/../livepeer-gateway/.venv/bin/python",
+            "cwd": "${workspaceFolder}/../livepeer-gateway",
+            "program": "${workspaceFolder}/../livepeer-gateway/examples/transcode.py",
+            "args": [
+                "${workspaceFolder}/../livepeer-gateway/examples/clip.mp4",
+                "--discovery",
+                "https://dd-us5.fastagents.biz:8940/discovery",
+                "--signer",
+                "https://pymthouse-production.up.railway.app/",
+                "--token",
+                "eyJzaWduZXIiOiJodHRwczovL3B5bXRob3VzZS1wcmV2aWV3LnVwLnJhaWx3YXkuYXBwIiwic2lnbmVyX2hlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBhcHBfZGQ0Njg2MDA0MDY0MDlhNDAzYTgyOTUyX3BtdGhfNDIwZGMwODk1YmI1MGIxZDMxNTRkYzdhMzI1NzI3NmVkMzk3YjZiYTAwYmYxMGM4NzkwOTVlNzA5ZGE3Y2I4NCJ9LCJkaXNjb3ZlcnkiOiJodHRwczovL2Rpc2NvdmVyeS1zZXJ2aWNlLXByb2R1Y3Rpb24tODk1NS51cC5yYWlsd2F5LmFwcC92MS9kaXNjb3ZlcnkvcmF3In0=",
+                "--heights",
+                "360",
+                "--output-prefix",
+                "${workspaceFolder}/../livepeer-gateway/examples/out"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "write_frames (API key - vercel dashboard)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/write_frames.py",
+            "args": [
+                // "ai.chasemedia.io:8935",
+                // "--signer",
+                // "https://pymthouse-preview.up.railway.app/",
+                // "--api-key",
+                // "app_bf4a4dd275594713afe37052_pmth_b0db95032172513db131ddfd851f877aecd06655db6c1d96d8b5888c7467fe2f",
+                // "https://hky.eliteencoder.net:8936",
+                "--token",
+                "eyJzaWduZXIiOiJodHRwczovL3B5bXRob3VzZS1wcm9kdWN0aW9uLnVwLnJhaWx3YXkuYXBwIiwic2lnbmVyX2hlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBhcHBfMDg2NzFhOTJhOTY2ZjkzZGJjNzUzMjk5X3BtdGhfOWVmNTVlZTVkZjMyMTJlM2RiMTFjMDAyMWU1NzY1YjQ1ODlkZTRkYzk5ZmMwZTU0NWFmYzY3NDFjMWVjMDk3NyJ9LCJkaXNjb3ZlcnkiOiJodHRwczovL2Rpc2NvdmVyeS1zZXJ2aWNlLXByb2R1Y3Rpb24tODk1NS51cC5yYWlsd2F5LmFwcC92MS9kaXNjb3ZlcnkvcmF3In0=",
+                "--model",
+                "streamdiffusion-sdxl-v2v",
+                "--count",
+                "9000000"
+            ],
+            "env": {
+                "LOG_LEVEL": "DEBUG"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "byoc / flux-schnell",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/byoc_job.py",
+            "args": [
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw",
+                "--signer",
+                "https://pymthouse-production.up.railway.app/",
+                "--api-key",
+                "app_c5335e635593432ca975877a.pmth_14e1dc97f2ef21ab839c2786663d47140ae3d100032cd4a5881ba8099a4473ba",
+                "--capability",
+                "flux-schnell",
+                "--prompt",
+                "a small red cube on a white table",
+                "--timeout-seconds",
+                "120"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "byoc / nano-banana",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/byoc_job.py",
+            "args": [
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw",
+                "--signer",
+                "https://pymthouse-preview.up.railway.app/",
+                "--api-key",
+                "app_bf4a4dd275594713afe37052_pmth_b0db95032172513db131ddfd851f877aecd06655db6c1d96d8b5888c7467fe2f",
+                "--capability",
+                "nano-banana",
+                "--prompt",
+                "a small red cube on a white table",
+                "--timeout-seconds",
+                "120"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "byoc / recraft-v4",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/byoc_job.py",
+            "args": [
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw",
+                "--signer",
+                "https://pymthouse-production.up.railway.app/",
+                "--api-key",
+                "app_c5335e635593432ca975877a.pmth_14e1dc97f2ef21ab839c2786663d47140ae3d100032cd4a5881ba8099a4473ba",
+                "--capability",
+                "recraft-v4",
+                "--prompt",
+                "a small red cube on a white table",
+                "--timeout-seconds",
+                "120"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "byoc / transcode/ffmpeg",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/../livepeer-gateway/.venv/bin/python",
+            "cwd": "${workspaceFolder}/../livepeer-gateway",
+            "program": "${workspaceFolder}/../livepeer-gateway/examples/transcode.py",
+            "args": [
+                "${workspaceFolder}/../livepeer-gateway/examples/clip.mp4",
+                // "--discovery",
+                // "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw",
+                // "--signer",
+                // "https://pymthouse-production.up.railway.app/",
+                // "--api-key",
+                // "app_44d645107e65242186c272ef_pmth_9ada0de37abe683835e00ed828a2e10b8989b1a5205a6e7d1f3793bb7b564ab7",
+                "--token",
+                "eyJzaWduZXIiOiJodHRwczovL3B5bXRob3VzZS1wcm9kdWN0aW9uLnVwLnJhaWx3YXkuYXBwIiwic2lnbmVyX2hlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBhcHBfMDg2NzFhOTJhOTY2ZjkzZGJjNzUzMjk5X3BtdGhfOWVmNTVlZTVkZjMyMTJlM2RiMTFjMDAyMWU1NzY1YjQ1ODlkZTRkYzk5ZmMwZTU0NWFmYzY3NDFjMWVjMDk3NyJ9LCJkaXNjb3ZlcnkiOiJodHRwczovL2Rpc2NvdmVyeS1zZXJ2aWNlLXByb2R1Y3Rpb24tODk1NS51cC5yYWlsd2F5LmFwcC92MS9kaXNjb3ZlcnkvcmF3In0=",
+                "--heights",
+                "360",
+                "--output-prefix",
+                "${workspaceFolder}/../livepeer-gateway/examples/out"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "transcode live (transcode/ffmpeg @ discovery-service)",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/../livepeer-gateway/.venv/bin/python",
+            "cwd": "${workspaceFolder}/../livepeer-gateway",
+            "program": "${workspaceFolder}/../livepeer-gateway/examples/transcode.py",
+            "args": [
+                "${workspaceFolder}/../livepeer-gateway/examples/clip.mp4",
+                "--live",
+                "--discovery",
+                "https://discovery-service-production-8955.up.railway.app/v1/discovery/raw",
+                "--signer",
+                "https://pymthouse-production.up.railway.app/",
+                "--api-key",
+                "app_44d645107e65242186c272ef_pmth_036170cd77b45863a302cee983ad222cc96629e7704474ad8fdae92244ed0fab",
+                "--heights",
+                "720",
+                "--output-prefix",
+                "${workspaceFolder}/../livepeer-gateway/examples/out"
+            ],
+            "env": {
+                "LOG_LEVEL": "INFO"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

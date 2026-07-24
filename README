@@ -37,6 +37,12 @@ Write raw frames to a LiveVideoToVideo job
 uv run examples/write_frames.py localhost:8935
 ```
 
+ComfyPeer local MCP client (PymtHouse auth + discovery + live-runner/BYOC/LV2V tools):
+```
+cd examples/comfypeer-mcp && cp .env.example .env && uv sync && uv run comfypeer-mcp
+```
+See `examples/comfypeer-mcp/README.md`. Hosted catalog/session MCP lives on PymtHouse at `/api/v1/mcp`.
+
 Capture MacOS camera frames and publish via write_frame
 ```
 uv run examples/camera_capture.py localhost:8935

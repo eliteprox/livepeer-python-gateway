@@ -30,6 +30,11 @@ def _parse_args() -> argparse.Namespace:
         help="Base64-encoded gateway token (signer, discovery, headers); overrides missing signer/orchestrator.",
     )
     p.add_argument(
+        "--discovery",
+        default=None,
+        help="Discovery endpoint URL (overrides token discovery).",
+    )
+    p.add_argument(
         "--model",
         default=DEFAULT_MODEL_ID,
         help=f"Pipeline model to start via /live-video-to-video. Default: {DEFAULT_MODEL_ID}",
@@ -59,6 +64,7 @@ async def main() -> None:
             StartJobRequest(model_id=args.model),
             token=args.token,
             signer_url=args.signer,
+            discovery_url=args.discovery,
         )
 
         print("=== LiveVideoToVideo ===")

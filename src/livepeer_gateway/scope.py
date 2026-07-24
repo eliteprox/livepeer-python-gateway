@@ -32,14 +32,15 @@ async def start_scope(
     challenge is handled by the live-runner payment flow.
 
     Optional ``token`` can be provided as a base64-encoded JSON object.
-    Token values take precedence over explicit keyword arguments.
-    Explicit keyword arguments are used only for fields missing in the token.
+    Token values take precedence over explicit keyword arguments for signer,
+    signer headers, orchestrators, and discovery headers. Explicit
+    ``discovery_url`` overrides token ``discovery``.
 
     Runner discovery precedence (highest -> lowest):
     1) token ``orchestrators`` value, converted by appending ``/discovery``
     2) explicit ``orch_url`` value, converted by appending ``/discovery``
-    3) token ``discovery`` value
-    4) explicit ``discovery_url`` argument
+    3) explicit ``discovery_url`` argument
+    4) token ``discovery`` value
     5) remote signer discovery endpoint derived from the resolved signer URL
 
     """
@@ -59,9 +60,9 @@ async def start_scope(
     if resolved_signer_headers is None:
         resolved_signer_headers = signer_headers
 
-    resolved_discovery_url = token_data.get("discovery") if token_data else None
-    if resolved_discovery_url is None:
-        resolved_discovery_url = discovery_url
+    resolved_discovery_url = discovery_url
+    if resolved_discovery_url is None and token_data:
+        resolved_discovery_url = token_data.get("discovery")
 
     resolved_discovery_headers = token_data.get("discovery_headers") if token_data else None
     if resolved_discovery_headers is None:
