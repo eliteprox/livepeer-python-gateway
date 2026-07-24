@@ -13,7 +13,11 @@ from comfypeer_mcp import __version__
 from comfypeer_mcp.auth import AuthError, authenticate_request
 from comfypeer_mcp.byoc_tools import byoc_submit, training_status, training_submit
 from comfypeer_mcp.config import get_settings
-from comfypeer_mcp.discovery import discovery_freshness, list_capabilities, query_orchestrators
+from comfypeer_mcp.discovery import (
+    discovery_freshness,
+    list_capabilities as discovery_list_capabilities,
+    query_orchestrators as discovery_query_orchestrators,
+)
 from comfypeer_mcp.live_runner import ExecutionError, live_runner_call
 from comfypeer_mcp.lv2v_tools import lv2v_close, lv2v_start, lv2v_write_control
 from comfypeer_mcp.rate_limit import RateLimitExceeded, RateLimiter
@@ -22,12 +26,13 @@ from comfypeer_mcp.session import create_signer_session_payload
 _authorization: ContextVar[str | None] = ContextVar("authorization", default=None)
 
 mcp = FastMCP(
-    "ComfyPeer",
+    "Livepeer MCP",
     instructions=(
-        "ComfyPeer Livepeer Network MCP. Authenticate with Authorization: Bearer "
-        "<PymtHouse user API key>. Use discovery tools for catalog; create_signer_session "
-        "for local gateway tokens; live_runner_call / byoc / lv2v for execution. "
-        "Hosted MCP rejects loopback discovery/orch URLs unless ALLOW_LOOPBACK_DISCOVERY=1."
+        "Livepeer Network MCP. Authenticate with Authorization: Bearer "
+        "<PymtHouse user API key>. Use list_capabilities / query_orchestrators for catalog; "
+        "create_signer_session for local gateway tokens; run_capability (BYOC), "
+        "start_stream / stop_stream (LV2V), call_live_runner (sessionful HTTP apps) for execution. "
+        "Loopback discovery/orch URLs require ALLOW_LOOPBACK_DISCOVERY=1."
     ),
 )
 
@@ -48,25 +53,25 @@ async def _require_session():
 
 
 @mcp.tool()
-async def list_network_capabilities(service_type: str | None = None) -> str:
-    """List capabilities from discovery-service.
+async def list_capabilities(service_type: str | None = None) -> str:
+    """List capabilities from discovery-service (Storyboard-aligned catalog tool).
 
     service_type: live-video-to-video | live-runner | modules | batch (omit for default mix).
     """
     settings, _, _ = await _require_session()
-    data = await list_capabilities(settings, service_type=service_type)
+    data = await discovery_list_capabilities(settings, service_type=service_type)
     return json.dumps(data, indent=2)
 
 
 @mcp.tool()
-async def query_network_orchestrators(
+async def query_orchestrators(
     capabilities: list[str],
     service_types: list[str] | None = None,
     top_n: int = 50,
 ) -> str:
     """Query ranked orchestrators for the given capability names."""
     settings, _, _ = await _require_session()
-    data = await query_orchestrators(
+    data = await discovery_query_orchestrators(
         settings,
         capabilities=capabilities,
         service_types=service_types,
@@ -106,17 +111,17 @@ async def create_signer_session(force_refresh: bool = False) -> str:
 
 
 @mcp.tool()
-async def live_runner_call_tool(
+async def call_live_runner(
     app: str,
     path: str,
     payload: dict[str, Any],
     discovery_url: str | None = None,
     signer_url: str | None = None,
 ) -> str:
-    """Reserve a live-runner session, call app path, then stop (hello-world / vllm pattern).
+    """Call a live-runner HTTP app: reserve session → POST path → stop.
 
     Prefer production discovery by default. Pass discovery_url only for reachable hosts;
-    localhost requires a local MCP/gateway (ALLOW_LOOPBACK_DISCOVERY).
+    localhost requires ALLOW_LOOPBACK_DISCOVERY=1.
     """
     settings, _, session = await _require_session()
     try:
@@ -135,14 +140,14 @@ async def live_runner_call_tool(
 
 
 @mcp.tool()
-async def byoc_submit_tool(
+async def run_capability(
     capability: str,
     payload: dict[str, Any],
     orch_url: str | None = None,
     discovery_url: str | None = None,
     timeout_seconds: int = 300,
 ) -> str:
-    """Submit a synchronous BYOC inference job."""
+    """Run a BYOC network capability (sync /inference). Storyboard analogue: create_media."""
     settings, _, session = await _require_session()
     try:
         result = byoc_submit(
@@ -161,7 +166,7 @@ async def byoc_submit_tool(
 
 
 @mcp.tool()
-async def byoc_training_submit_tool(
+async def submit_training(
     capability: str,
     model_id: str,
     params: dict[str, Any],
@@ -187,8 +192,8 @@ async def byoc_training_submit_tool(
 
 
 @mcp.tool()
-async def byoc_training_status_tool(job_id: str, orch_url: str) -> str:
-    """Poll BYOC training job status."""
+async def get_job_status(job_id: str, orch_url: str) -> str:
+    """Poll an async training / job status by id."""
     await _require_session()
     try:
         result = training_status(job_id=job_id, orch_url=orch_url)
@@ -198,7 +203,7 @@ async def byoc_training_status_tool(job_id: str, orch_url: str) -> str:
 
 
 @mcp.tool()
-async def lv2v_start_tool(
+async def start_stream(
     model_id: str,
     params: dict[str, Any] | None = None,
     orch_url: str | None = None,
@@ -206,7 +211,7 @@ async def lv2v_start_tool(
     request_id: str | None = None,
     stream_id: str | None = None,
 ) -> str:
-    """Start a live-video-to-video job; returns media/control URLs (no pixel streaming)."""
+    """Start a live-video-to-video stream; returns media/control URLs (no pixel streaming)."""
     settings, _, session = await _require_session()
     try:
         result = await lv2v_start(
@@ -226,8 +231,8 @@ async def lv2v_start_tool(
 
 
 @mcp.tool()
-async def lv2v_write_control_tool(job_id: str, message: dict[str, Any]) -> str:
-    """Write a control message to an active LV2V job."""
+async def write_stream_control(job_id: str, message: dict[str, Any]) -> str:
+    """Write a control message to an active live stream (LV2V)."""
     await _require_session()
     try:
         result = await lv2v_write_control(job_id=job_id, message=message)
@@ -237,8 +242,8 @@ async def lv2v_write_control_tool(job_id: str, message: dict[str, Any]) -> str:
 
 
 @mcp.tool()
-async def lv2v_close_tool(job_id: str) -> str:
-    """Close an active LV2V job handle."""
+async def stop_stream(job_id: str) -> str:
+    """Stop / close an active live stream handle."""
     await _require_session()
     try:
         result = await lv2v_close(job_id=job_id)
@@ -248,12 +253,12 @@ async def lv2v_close_tool(job_id: str) -> str:
 
 
 @mcp.tool()
-async def comfypeer_info() -> str:
+async def livepeer_mcp_info() -> str:
     """Return MCP host metadata (no secrets)."""
     settings = get_settings()
     return json.dumps(
         {
-            "name": "ComfyPeer",
+            "name": "Livepeer MCP",
             "version": __version__,
             "mcp_public_url": settings.mcp_public_url,
             "discovery_service_url": settings.discovery_service_url,
@@ -267,7 +272,7 @@ async def comfypeer_info() -> str:
 class AuthHeaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path in {"/healthz", "/health"}:
-            return JSONResponse({"status": "ok", "service": "comfypeer-mcp"})
+            return JSONResponse({"status": "ok", "service": "livepeer-mcp"})
         token = request.headers.get("authorization")
         _authorization.set(token)
         try:

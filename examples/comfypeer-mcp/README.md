@@ -1,6 +1,6 @@
-# Local ComfyPeer MCP client
+# Local Livepeer MCP client
 
-Run this example next to `livepeer-python-gateway` when you want Cursor (or any MCP client) to call Livepeer tools **on your machine** — discovery, signer session mint via PymtHouse, and `reserve_session` → `call_runner` → `stop` (same loop as `examples/echo` / the vllm gateway pattern).
+Run this example next to `livepeer-python-gateway` when you want Cursor (or any MCP client) to call Livepeer network tools **on your machine** — discovery, signer session mint via PymtHouse, and execution (`run_capability`, `start_stream`, `call_live_runner`).
 
 For **hosted** Livepeer MCP (catalog + session mint, no local orch execution), use PymtHouse `GET/POST /api/v1/mcp` — see PymtHouse `docs/livepeer-mcp.md`.
 
@@ -31,13 +31,18 @@ Cursor:
 
 ## Tools
 
+Storyboard-aligned network verbs (product tools like `generate_project` stay in Storyboard):
+
 | Tool | Purpose |
 | --- | --- |
-| `list_network_capabilities` | discovery-service catalog |
-| `query_network_orchestrators` | ranked orch query |
+| `list_capabilities` | discovery-service catalog |
+| `query_orchestrators` | ranked orch query |
 | `create_signer_session` | SignerSession + base64 `--token` for other SDK scripts |
-| `live_runner_call_tool` | reserve → call → stop |
-| `byoc_*` / `lv2v_*` | batch and live-video-to-video |
+| `run_capability` | BYOC `/inference` (Storyboard analogue: `create_media`) |
+| `submit_training` / `get_job_status` | async BYOC training |
+| `start_stream` / `write_stream_control` / `stop_stream` | live-video-to-video |
+| `call_live_runner` | reserve → HTTP app call → stop |
+| `livepeer_mcp_info` | host metadata |
 
 `ALLOW_LOOPBACK_DISCOVERY=1` by default so `http://localhost:8935/discovery` works.
 
