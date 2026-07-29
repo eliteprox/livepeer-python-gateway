@@ -219,6 +219,10 @@ class LivePaymentSession:
         self._state: Optional[dict[str, Any]] = None
         self._orchestrator_url = orchestrator_url
 
+    @property
+    def payment_type(self) -> str:
+        return self._type
+
     async def get_payment(self) -> GetPaymentResponse:
         if not self._signer_url:
             return GetPaymentResponse(payment="", seg_creds=None)
@@ -370,6 +374,10 @@ class PaymentSession:
         self._use_tofu = use_tofu
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: Optional[dict[str, str]] = None
+
+    @property
+    def payment_type(self) -> str:
+        return self._type
 
     def set_manifest_id(self, manifest_id: str) -> None:
         if not isinstance(manifest_id, str) or not manifest_id.strip():

@@ -30,6 +30,10 @@ _LOG = logging.getLogger(__name__)
 _DEFAULT_HEARTBEAT_INTERVAL_S = 5.0
 _LIVE_RUNNER_PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
 _LIVE_RUNNER_MODES = frozenset({"persistent", "single-shot"})
+# Registration units accepted by go-livepeer (USD → wei conversion happens orch-side).
+_LIVE_RUNNER_PRICE_UNITS = frozenset({"hour", "720p", "fixed"})
+# Discovery/payment units after orch conversion. ``fixed`` is one-shot per request.
+_LIVE_RUNNER_DISCOVERY_FIXED_UNIT = "fixed"
 
 # golang format duration, eg "10s"
 _DURATION_RE = re.compile(r"^\s*(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>ns|us|\u00b5s|ms|s|m|h)\s*$")
@@ -190,14 +194,42 @@ class LiveRunnerGPU:
 
 @dataclass(frozen=True)
 class LiveRunnerPriceInfo:
-    price_per_unit: int
-    pixels_per_unit: int
-    unit: str = "USD"
+    """Registration price advertised to the orchestrator for a live runner.
+
+    Matches go-livepeer's live-runner ``price_info`` wire format:
+
+    - ``currency`` must be ``usd`` (default).
+    - ``unit`` must be ``hour``, ``720p``, or ``fixed`` (default ``hour``).
+    - ``fixed`` is a flat per-request USD price (no time/pixel divisor); discovery
+      advertises it as ``unit: "fixed"`` in wei.
+    """
+
+    price: str | int | float
+    currency: str = "usd"
+    unit: str = "hour"
+
+    def __post_init__(self) -> None:
+        currency = (self.currency or "").strip().lower() or "usd"
+        unit = (self.unit or "").strip().lower() or "hour"
+        if currency != "usd":
+            raise ValueError("price_info.currency must be usd")
+        if unit not in _LIVE_RUNNER_PRICE_UNITS:
+            raise ValueError("price_info.unit must be hour, 720p, or fixed")
+        if isinstance(self.price, bool) or not isinstance(self.price, (str, int, float)):
+            raise ValueError("price_info.price must be a decimal number or string")
+        if isinstance(self.price, str) and not self.price.strip():
+            raise ValueError("price_info.price is required")
+        object.__setattr__(self, "currency", currency)
+        object.__setattr__(self, "unit", unit)
 
     def to_json(self) -> dict[str, Any]:
+        if isinstance(self.price, (int, float)) and not isinstance(self.price, bool):
+            price: str | int | float = self.price
+        else:
+            price = str(self.price).strip()
         return {
-            "price_per_unit": self.price_per_unit,
-            "pixels_per_unit": self.pixels_per_unit,
+            "price": price,
+            "currency": self.currency,
             "unit": self.unit,
         }
 
@@ -517,9 +549,10 @@ async def register_runner(
     secret: str,
     runner_url: str,
     app: str,
-    price_per_unit: int = 0,
-    pixels_per_unit: int = 1,
-    price_unit: str = "USD",
+    price_info: Optional[LiveRunnerPriceInfo] = None,
+    price: str | int | float = 0,
+    price_currency: str = "usd",
+    price_unit: str = "hour",
     runner_id: str = "",
     mode: str = "persistent",
     label: str = "",
@@ -537,12 +570,18 @@ async def register_runner(
     if gpu is None and auto_detect_gpu:
         gpu = detect_process_gpu()
 
+    resolved_price = price_info or LiveRunnerPriceInfo(
+        price=price,
+        currency=price_currency,
+        unit=price_unit,
+    )
+
     registration = LiveRunnerRegistration(
         orchestrator_url=orchestrator_url,
         secret=secret,
         runner_url=runner_url,
         app=app,
-        price_info=LiveRunnerPriceInfo(price_per_unit, pixels_per_unit, price_unit),
+        price_info=resolved_price,
         runner_id=runner_id,
         mode=mode,
         label=label,
@@ -685,6 +724,13 @@ async def call_runner(
                 raise LivepeerGatewayError(
                     f"Live runner call expected JSON object, got {type(data).__name__}"
                 )
+            # Fixed-price sessions settle in the reservation payment; follow-up
+            # /payment calls are rejected by the orchestrator (HTTP 409).
+            retained_payment = (
+                None
+                if payment_session is not None and _is_fixed_payment_type(payment_session)
+                else payment_session
+            )
             return LiveRunnerCallResult(
                 data,
                 runner_url=runner_url,
@@ -693,7 +739,7 @@ async def call_runner(
                     session_id
                     or (data["session_id"].strip() if isinstance(data.get("session_id"), str) else "")
                 ),
-                payment_session=payment_session,
+                payment_session=retained_payment,
             )
         except LivepeerHTTPError as e:
             if e.status_code != 402:
@@ -746,10 +792,11 @@ async def _get_runner_payment(
     runner: Optional[LiveRunnerInstance] = None,
 ) -> tuple[LivePaymentSession, GetPaymentResponse]:
     app = runner.app if runner is not None else ""
+    payment_type = _payment_type_for_runner(runner)
     session = LivePaymentSession(
         signer_url=signer_url,
         signer_headers=signer_headers,
-        type="lv2v",
+        type=payment_type,
         payment_params=challenge.payment_params,
         manifest_id=challenge.manifest_id,
         orchestrator_url=challenge.orchestrator_url,
@@ -761,6 +808,32 @@ async def _get_runner_payment(
     if not payment.seg_creds:
         raise LivepeerGatewayError("Live runner payment response missing segCreds")
     return session, payment
+
+
+def _payment_type_for_runner(runner: Optional[LiveRunnerInstance]) -> str:
+    """Map discovery ``price_info.unit`` to a remote-signer job type.
+
+    Discovery advertises converted units: ``seconds``, ``720p-pixel-seconds``,
+    or ``fixed``. ``fixed`` is a one-shot per-request charge.
+    """
+    if runner is None:
+        return "lv2v"
+    price_info = runner.raw.get("price_info")
+    if not isinstance(price_info, dict):
+        return "lv2v"
+    unit = price_info.get("unit")
+    if not isinstance(unit, str):
+        return "lv2v"
+    normalized = unit.strip().lower()
+    if normalized == _LIVE_RUNNER_DISCOVERY_FIXED_UNIT:
+        return "fixed"
+    if normalized == "seconds":
+        return "live"
+    return "lv2v"
+
+
+def _is_fixed_payment_type(payment_session: LivePaymentSession) -> bool:
+    return payment_session.payment_type == "fixed"
 
 
 def _live_runner_session_from_json(
