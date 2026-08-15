@@ -328,6 +328,8 @@ def start_lv2v(
     if resolved_discovery_headers is None:
         resolved_discovery_headers = discovery_headers
 
+    resolved_caps = token_data.get("caps") if token_data else None
+
     capabilities = build_capabilities(CapabilityId.LIVE_VIDEO_TO_VIDEO, req.model_id)
     # Orchestrator discovery precedence after token-first field resolution:
     # token orchestrators -> explicit orch_url -> token discovery ->
@@ -339,6 +341,7 @@ def start_lv2v(
         discovery_url=resolved_discovery_url,
         discovery_headers=resolved_discovery_headers,
         capabilities=capabilities,
+        caps=resolved_caps,
         use_tofu=use_tofu,
     )
 

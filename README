@@ -22,8 +22,11 @@ On-chain mode with a remote signer
 ```
 uv run examples/get_orchestrator_info.py --signer "<signer-host:port>"
 
-# Use a custom discovery endpoint to filter orchestrators
-uv run examples/get_orchestrator_info.py --signer "<signer-host:port>" '<discovery-host>/discover-orchestrators?cap=streamdiffusion-sdxl-v2v'
+# Use a custom discovery endpoint to filter orchestrators.
+# The param is `caps` (plural, repeatable, OR semantics) and the value is the
+# full capability id. A misspelled param is silently ignored by the remote
+# signer, which then returns every orchestrator.
+uv run examples/get_orchestrator_info.py --signer "<signer-host:port>" '<discovery-host>/discover-orchestrators?caps=live-video-to-video/streamdiffusion-sdxl-v2v'
 
 ```
 
@@ -80,8 +83,9 @@ payload = {
     ],
     "signer": "https://signer.example.com",
     "signer_headers": {"Authorization": "Bearer abcdef"},
-    "discovery": "https://discovery.example.com",
+    "discovery": "https://signer.example.com/discover-orchestrators",
     "discovery_headers": {"Authorization": "Bearer qwerty"},
+    "caps": ["live-video-to-video/streamdiffusion"],
 }
 token = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
 
@@ -103,6 +107,7 @@ job = start_lv2v(
 | `signer_headers` | `{"key": "value"}` (optional) | Extra HTTP headers sent to all signer endpoints |
 | `discovery` | `string` (optional) | Discovery endpoint URL |
 | `discovery_headers` | `{"key": "value"}` (optional) | Extra HTTP headers sent to the discovery endpoint |
+| `caps` | `string[]` (optional) | Capability filters appended as repeated `caps` query params on remote-signer discovery |
 
 Token values take precedence over explicit keyword arguments.
 Explicit keyword arguments are used only for fields missing in the token.
@@ -115,6 +120,6 @@ Selection/discovery precedence (highest -> lowest):
 2) explicit `orch_url`
 3) token `discovery`
 4) explicit `discovery_url`
-5) signer-derived discovery endpoint
+5) signer-derived discovery endpoint (`{signer}/discover-orchestrators`)
 
 `signer_headers` are sent with requests to the signer service. `discovery_headers` are only used when an explicit `discovery_url` is provided (and not when using the signer service as a discovery fallback).

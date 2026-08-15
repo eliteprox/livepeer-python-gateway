@@ -19,6 +19,8 @@ generate-lp-rpc = "livepeer_gateway.codegen:main"
 [project.optional-dependencies]
 dev = [
   "grpcio-tools>=1.65.0",
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
 ]
 
 examples = [

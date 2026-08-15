@@ -67,6 +67,8 @@ async def start_scope(
     if resolved_discovery_headers is None:
         resolved_discovery_headers = discovery_headers
 
+    resolved_caps = token_data.get("caps") if token_data else None
+
     body = req.to_json()
     return await _start_scope_with_runner(
         body=body,
@@ -75,6 +77,7 @@ async def start_scope(
         discovery_url=resolved_discovery_url,
         discovery_headers=resolved_discovery_headers,
         orch_url=resolved_orch_url,
+        caps=resolved_caps,
         timeout=timeout,
     )
 
@@ -87,6 +90,7 @@ async def _start_scope_with_runner(
     discovery_url: Optional[str],
     discovery_headers: Optional[dict[str, str]],
     orch_url: Optional[Sequence[str] | str],
+    caps: Optional[Sequence[str]],
     timeout: float,
 ):
     cursor = await runner_selector(
@@ -97,6 +101,7 @@ async def _start_scope_with_runner(
         discovery_url=discovery_url,
         discovery_headers=discovery_headers,
         app=_SCOPE_RUNNER_APP,
+        caps=caps,
         timeout=timeout,
     )
 

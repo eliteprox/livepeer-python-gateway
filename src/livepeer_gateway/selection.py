@@ -125,6 +125,7 @@ def orchestrator_selector(
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
     capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
+    caps: Optional[Sequence[str]] = None,
     use_tofu: bool = True,
 ) -> SelectionCursor:
     orch_list = discover_orchestrators(
@@ -134,6 +135,7 @@ def orchestrator_selector(
         discovery_url=discovery_url,
         discovery_headers=discovery_headers,
         capabilities=capabilities,
+        caps=caps,
     )
 
     if not orch_list:
@@ -231,6 +233,7 @@ async def runner_selector(
     discovery_headers: Optional[dict[str, str]] = None,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
+    caps: Optional[Sequence[str]] = None,
     timeout: float = 5.0,
 ) -> RunnerSelectionCursor:
     if orchestrators is not None:
@@ -238,6 +241,7 @@ async def runner_selector(
             orchestrators,
             app=app,
             gpu=gpu,
+            caps=caps,
         )
     else:
         entries = await discover_runners(
@@ -247,6 +251,7 @@ async def runner_selector(
             discovery_headers=discovery_headers,
             app=app,
             gpu=gpu,
+            caps=caps,
         )
 
     candidates = _runner_candidates_from_discovery(entries)
@@ -274,6 +279,7 @@ async def reserve_session(
     orchestrators: Optional[Sequence[str] | str] = None,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
+    caps: Optional[Sequence[str]] = None,
     timeout: float = 5.0,
     payment_interval: float = 3.0,
 ) -> LiveRunnerSession:
@@ -285,6 +291,7 @@ async def reserve_session(
         discovery_headers=discovery_headers,
         app=app,
         gpu=gpu,
+        caps=caps,
         timeout=timeout,
     )
     result = await cursor.next()

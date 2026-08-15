@@ -12,6 +12,26 @@ def _is_str_dict(v: object) -> bool:
     return isinstance(v, dict) and all(isinstance(k, str) and isinstance(val, str) for k, val in v.items())
 
 
+def _normalize_caps(raw: object) -> Optional[list[str]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise LivepeerGatewayError("Invalid token: caps must be an array of strings")
+    caps: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise LivepeerGatewayError(
+                "Invalid token: caps must contain only non-empty strings"
+            )
+        cap = item.strip()
+        if cap in seen:
+            continue
+        seen.add(cap)
+        caps.append(cap)
+    return caps or None
+
+
 def parse_token(token: str) -> dict[str, Any]:
     try:
         decoded = base64.b64decode(token, validate=True)
@@ -59,4 +79,5 @@ def parse_token(token: str) -> dict[str, Any]:
         "discovery": discovery,
         "signer_headers": signer_headers,
         "discovery_headers": discovery_headers,
+        "caps": _normalize_caps(payload.get("caps")),
     }

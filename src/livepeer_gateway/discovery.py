@@ -49,6 +49,14 @@ def _append_caps(url: str, capabilities: Optional[lp_rpc_pb2.Capabilities]) -> s
     return _append_query_values(url, [("caps", cap) for cap in capabilities_to_query(capabilities)])
 
 
+def _append_cap_strings(url: str, caps: Optional[Sequence[str]]) -> str:
+    """Append repeated `caps` query parameters from plain capability strings."""
+    normalized = _normalize_filter_values(caps)
+    if not normalized:
+        return url
+    return _append_query_values(url, [("caps", cap) for cap in normalized])
+
+
 def _append_runner_filters(
     url: str,
     *,
@@ -69,6 +77,7 @@ def discover_orchestrators(
     discovery_url: Optional[str] = None,
     discovery_headers: Optional[dict[str, str]] = None,
     capabilities: Optional[lp_rpc_pb2.Capabilities] = None,
+    caps: Optional[Sequence[str]] = None,
 ) -> list[str]:
     """
     Discover orchestrators and return a list of addresses.
@@ -78,6 +87,9 @@ def discover_orchestrators(
       (empty/whitespace-only input falls through)
     - discovery_url: use this discovery endpoint
     - signer_url: use signer-provided discovery service
+
+    Optional ``capabilities`` (protobuf) and ``caps`` (string list) both append
+    repeated ``caps`` query params (OR semantics on the remote signer).
     """
     if orchestrators is not None:
         if isinstance(orchestrators, str):
@@ -105,6 +117,8 @@ def discover_orchestrators(
 
     if capabilities is not None:
         discovery_endpoint = _append_caps(discovery_endpoint, capabilities)
+    if caps is not None:
+        discovery_endpoint = _append_cap_strings(discovery_endpoint, caps)
 
     try:
         _LOG.debug("discover_orchestrators running discovery: %s", discovery_endpoint)
@@ -150,6 +164,7 @@ async def discover_runners(
     discovery_headers: Optional[dict[str, str]] = None,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
+    caps: Optional[Sequence[str]] = None,
 ) -> list[dict[str, Any]]:
     """
     Discover live runners and return discovery entries.
@@ -157,6 +172,10 @@ async def discover_runners(
     Filters are composed as OR within each field and AND across fields.
     For example, app=["a", "b"], gpu=["H100", "L40S"] matches
     (app=a OR app=b) AND (gpu=H100 OR gpu=L40S).
+
+    Optional ``caps`` appends repeated remote-signer ``caps`` query params and
+    is re-applied locally against each entry's advertised ``capabilities``, so a
+    signer that ignores the filter cannot return non-matching orchestrators.
     """
     if discovery_url:
         discovery_endpoint = _parse_http_url(discovery_url).geturl()
@@ -170,7 +189,10 @@ async def discover_runners(
 
     app_filters = _normalize_filter_values(app)
     gpu_filters = _normalize_filter_values(gpu)
+    caps_filters = _normalize_filter_values(caps)
     discovery_endpoint = _append_runner_filters(discovery_endpoint, app=app_filters, gpu=gpu_filters)
+    if caps is not None:
+        discovery_endpoint = _append_cap_strings(discovery_endpoint, caps)
 
     try:
         _LOG.debug("discover_runners running discovery: %s", discovery_endpoint)
@@ -194,7 +216,12 @@ async def discover_runners(
             cause=None,
         ) from None
 
-    entries = _filter_runner_discovery_entries(data, app_filters=app_filters, gpu_filters=gpu_filters)
+    entries = _filter_runner_discovery_entries(
+        data,
+        app_filters=app_filters,
+        gpu_filters=gpu_filters,
+        caps_filters=caps_filters,
+    )
     _LOG.debug("discover_runners discovered %d orchestrator entries", len(entries))
     return entries
 
@@ -204,6 +231,7 @@ async def discover_orchestrator_runners(
     *,
     app: Optional[FilterValue] = None,
     gpu: Optional[FilterValue] = None,
+    caps: Optional[Sequence[str]] = None,
     batch_size: int = _RUNNER_DISCOVERY_BATCH_SIZE,
 ) -> list[dict[str, Any]]:
     first_error: Exception | None = None
@@ -211,7 +239,10 @@ async def discover_orchestrator_runners(
     for batch_start in range(0, len(urls), batch_size):
         batch = urls[batch_start : batch_start + batch_size]
         results = await asyncio.gather(
-            *(discover_runners(discovery_url=discovery_url, app=app, gpu=gpu) for discovery_url in batch),
+            *(
+                discover_runners(discovery_url=discovery_url, app=app, gpu=gpu, caps=caps)
+                for discovery_url in batch
+            ),
             return_exceptions=True,
         )
         for discovery_url, result in zip(batch, results):
@@ -260,6 +291,7 @@ def _filter_runner_discovery_entries(
     *,
     app_filters: Sequence[str],
     gpu_filters: Sequence[str],
+    caps_filters: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for item in data:
@@ -267,6 +299,8 @@ def _filter_runner_discovery_entries(
             continue
         runners = item.get("runners")
         if not isinstance(runners, list):
+            continue
+        if not _entry_matches_caps(item, caps_filters):
             continue
 
         matched_runners = []
@@ -284,6 +318,26 @@ def _filter_runner_discovery_entries(
             entry["runners"] = matched_runners
             entries.append(entry)
     return entries
+
+
+def _entry_matches_caps(entry: dict[str, Any], caps_filters: Sequence[str]) -> bool:
+    """
+    Re-check the remote signer's ``caps`` filter against the entry locally.
+
+    The remote signer treats an empty/unrecognized filter as "no filter" and
+    returns every orchestrator, so a typo in the query param name is
+    indistinguishable from an unfiltered request. Matching ``capabilities``
+    here means a caller that asked for a capability never receives an
+    orchestrator that does not advertise it. OR semantics across caps, matching
+    the remote signer's exact-string behavior.
+    """
+    if not caps_filters:
+        return True
+    capabilities = entry.get("capabilities")
+    if not isinstance(capabilities, list):
+        return False
+    advertised = {c.strip() for c in capabilities if isinstance(c, str) and c.strip()}
+    return any(cap in advertised for cap in caps_filters)
 
 
 def _valid_runner(runner: dict[str, Any]) -> bool:
