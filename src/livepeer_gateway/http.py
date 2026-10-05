@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import functools
 import json
+import os
 import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -17,6 +19,30 @@ from .errors import (
 )
 
 _REFRESH_SESSION_ORCHESTRATOR_URL_HEADER = "Livepeer-Orchestrator-URL"
+
+VERIFY_TLS_ENV = "LIVEPEER_GATEWAY_VERIFY_TLS"
+
+
+def _verify_tls_from_env() -> bool:
+    """``LIVEPEER_GATEWAY_VERIFY_TLS``: ``1``, ``true`` or ``yes`` turn verification on."""
+    return os.environ.get(VERIFY_TLS_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+# Orchestrators serve self-signed certificates, so HTTPS certificates are not
+# verified by default, as with the gRPC client. Set LIVEPEER_GATEWAY_VERIFY_TLS=1,
+# or assign VERIFY_TLS, when every HTTPS endpoint the SDK calls (signer,
+# discovery, orchestrators, runners, trickle) has a publicly trusted certificate.
+VERIFY_TLS: bool = _verify_tls_from_env()
+
+
+@functools.cache
+def _ssl_context_for(verify: bool) -> ssl.SSLContext:
+    return ssl.create_default_context() if verify else ssl._create_unverified_context()
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """TLS context for an outgoing HTTPS request, following ``VERIFY_TLS`` at call time."""
+    return _ssl_context_for(VERIFY_TLS)
 
 
 def _truncate(s: str, max_len: int = 2000) -> str:
@@ -160,9 +186,7 @@ def request_json_sync(
         headers=headers,
     )
     req = Request(url, data=body, headers=req_headers, method=resolved_method)
-
-    # Always ignore HTTPS certificate validation (matches our gRPC behavior).
-    ssl_ctx = ssl._create_unverified_context()
+    ssl_ctx = _ssl_context()
 
     try:
         with urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
@@ -266,7 +290,7 @@ async def _request_body(
 
     try:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector(ssl=_ssl_context())
         async with aiohttp.ClientSession(timeout=client_timeout, connector=connector) as session:
             async with session.request(resolved_method, url, data=body, headers=req_headers) as resp:
                 raw = await resp.read()
@@ -356,7 +380,7 @@ async def open_stream(
     )
 
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout, sock_read=None)
-    session = aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False))
+    session = aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=_ssl_context()))
     try:
         resp = await session.request(resolved_method, url, data=body, headers=req_headers)
     except (TimeoutError, aiohttp.ClientError) as e:

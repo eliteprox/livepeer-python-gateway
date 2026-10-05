@@ -173,3 +173,17 @@ Selection/discovery precedence (highest -> lowest):
 5) signer-derived discovery endpoint
 
 `signer_headers` are sent with requests to the signer service. `discovery_headers` are only used when an explicit `discovery_url` is provided (and not when using the signer service as a discovery fallback).
+
+## TLS certificate verification
+
+Orchestrators serve self-signed certificates, so by default the SDK does not
+verify HTTPS certificates (the gRPC client does not either). When every HTTPS
+endpoint the SDK reaches (signer, discovery, orchestrators, runners, trickle)
+presents a publicly trusted certificate, turn verification on for the process:
+
+```bash
+export LIVEPEER_GATEWAY_VERIFY_TLS=1   # "1", "true" or "yes"
+```
+
+or at runtime with `livepeer_gateway.http.VERIFY_TLS = True`. Verification then
+uses the system trust store.

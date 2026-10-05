@@ -33,7 +33,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import ssl
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
@@ -43,13 +42,9 @@ from urllib.request import Request, urlopen
 
 from .orchestrator import _http_origin, discover_orchestrators
 from .errors import LivepeerGatewayError, NoOrchestratorAvailableError, OrchestratorRejection
+from .http import _ssl_context
 
 _LOG = logging.getLogger(__name__)
-
-# Reusable SSL context (skip verification for self-signed certs)
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +397,7 @@ def submit_byoc_job(
         _LOG.info("BYOC job %s: trying orchestrator %s", job_id, orch_origin)
 
         try:
-            with urlopen(http_req, timeout=http_timeout, context=_ssl_ctx) as resp:
+            with urlopen(http_req, timeout=http_timeout, context=_ssl_context()) as resp:
                 raw_body = resp.read()
                 resp_headers = {k: v for k, v in resp.headers.items()}
 
@@ -688,7 +683,7 @@ def submit_training_job(
         _LOG.info("Training job %s: trying orchestrator %s", job_id, orch_origin)
 
         try:
-            with urlopen(http_req, timeout=http_timeout, context=_ssl_ctx) as resp:
+            with urlopen(http_req, timeout=http_timeout, context=_ssl_context()) as resp:
                 raw_body = resp.read()
                 data = json.loads(raw_body.decode("utf-8"))
 
@@ -820,7 +815,7 @@ def refresh_training_payment(
         # Empty JSON body — refresh carries everything in headers
         http_req = Request(url, data=b"{}", headers=headers, method="POST")
         try:
-            with urlopen(http_req, timeout=timeout, context=_ssl_ctx) as resp:
+            with urlopen(http_req, timeout=timeout, context=_ssl_context()) as resp:
                 body = resp.read().decode("utf-8")
                 if resp.status not in (200, 202):
                     raise LivepeerGatewayError(
@@ -881,7 +876,7 @@ def get_training_status(
     http_req = Request(url, headers={"Accept": "application/json"})
 
     try:
-        with urlopen(http_req, timeout=timeout, context=_ssl_ctx) as resp:
+        with urlopen(http_req, timeout=timeout, context=_ssl_context()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return ByocTrainingStatus(
                 job_id=data.get("job_id", job_id),

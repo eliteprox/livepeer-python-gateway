@@ -9,6 +9,7 @@ from typing import Optional, AsyncIterator, Callable
 import aiohttp
 
 from .errors import LivepeerGatewayError
+from .http import _ssl_context
 
 
 _LOG = logging.getLogger(__name__)
@@ -164,8 +165,7 @@ class TricklePublisher:
         if self._lock is None:
             self._lock = asyncio.Lock()
         if self._session is None:
-            # Ignore TLS validation (matches the rest of this repo).
-            connector = aiohttp.TCPConnector(ssl=False)
+            connector = aiohttp.TCPConnector(ssl=_ssl_context())
             self._session = aiohttp.ClientSession(connector=connector)
 
     def _stream_url(self, seq: int) -> str:
