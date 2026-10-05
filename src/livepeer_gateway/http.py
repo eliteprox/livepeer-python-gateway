@@ -16,6 +16,8 @@ from .errors import (
     SkipPaymentCycle,
 )
 
+from .multipart import MultipartBody, encode_multipart
+
 _REFRESH_SESSION_ORCHESTRATOR_URL_HEADER = "Livepeer-Orchestrator-URL"
 
 
@@ -83,26 +85,41 @@ def _header_value(headers: dict[str, str], name: str) -> str | None:
     return None
 
 
-def _json_request_parts(
+def _request_parts(
     url: str,
     *,
     method: str | None = None,
     payload: dict[str, Any] | None = None,
+    multipart: MultipartBody | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, str], bytes | None]:
-    req_headers: dict[str, str] = {
-        "Accept": "application/json",
-        "User-Agent": "livepeer-python-gateway/0.1",
-    }
+    """Resolve ``(method, headers, body)`` for a request.
+
+    ``payload`` is JSON-encoded with ``Content-Type: application/json`` and
+    ``Accept: application/json``. ``multipart`` is encoded as
+    ``multipart/form-data`` (the boundary is fixed per ``MultipartBody``, so a
+    retry sends byte-identical bytes) and sets no ``Accept``; the app picks the
+    response format. ``headers`` override anything set here.
+    """
+    req_headers: dict[str, str] = {"User-Agent": "livepeer-python-gateway/0.1"}
     body: bytes | None = None
-    if payload is not None:
-        req_headers["Content-Type"] = "application/json"
-        body = json.dumps(payload).encode("utf-8")
+    if multipart is not None:
+        req_headers["Content-Type"] = multipart.content_type
+        body = encode_multipart(multipart)
+    else:
+        req_headers["Accept"] = "application/json"
+        if payload is not None:
+            req_headers["Content-Type"] = "application/json"
+            body = json.dumps(payload).encode("utf-8")
     if headers:
         req_headers.update(headers)
 
-    resolved_method = method.upper() if method else ("POST" if payload is not None else "GET")
+    resolved_method = method.upper() if method else ("POST" if body is not None else "GET")
     return resolved_method, req_headers, body
+
+
+# Name kept for callers that imported the JSON-only helper (orchestrator re-exports it).
+_json_request_parts = _request_parts
 
 
 def _raise_http_json_error(
@@ -153,7 +170,7 @@ def request_json_sync(
 
     Raises LivepeerGatewayError on HTTP/network/JSON parsing errors.
     """
-    resolved_method, req_headers, body = _json_request_parts(
+    resolved_method, req_headers, body = _request_parts(
         url,
         method=method,
         payload=payload,
@@ -244,23 +261,26 @@ async def _request_body(
     *,
     method: str | None = None,
     payload: dict[str, Any] | None = None,
+    multipart: MultipartBody | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 5.0,
 ) -> tuple[bytes, str]:
     """
-    Make an async JSON-payload HTTP request and return the raw response body.
+    Make an async HTTP request (JSON ``payload`` or ``multipart`` body) and return
+    the raw response body.
 
     Returns ``(body, content_type)`` without assuming the response is JSON;
     request semantics and error mapping match request_json.
 
-    If method is None, defaults to POST when payload is provided, otherwise GET.
+    If method is None, defaults to POST when a body is provided, otherwise GET.
 
     Raises LivepeerGatewayError on HTTP/network errors.
     """
-    resolved_method, req_headers, body = _json_request_parts(
+    resolved_method, req_headers, body = _request_parts(
         url,
         method=method,
         payload=payload,
+        multipart=multipart,
         headers=headers,
     )
 
@@ -337,6 +357,7 @@ async def open_stream(
     *,
     method: str | None = None,
     payload: dict[str, Any] | None = None,
+    multipart: MultipartBody | None = None,
     headers: dict[str, str] | None = None,
     connect_timeout: float = 10.0,
 ) -> tuple[aiohttp.ClientSession, aiohttp.ClientResponse]:
@@ -348,10 +369,11 @@ async def open_stream(
     No total timeout (streams run indefinitely) only connect/first-byte are bounded.
     Raises LivepeerHTTPError on >= 400 (e.g. the 402 payment retry).
     """
-    resolved_method, req_headers, body = _json_request_parts(
+    resolved_method, req_headers, body = _request_parts(
         url,
         method=method,
         payload=payload,
+        multipart=multipart,
         headers=headers,
     )
 

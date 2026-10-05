@@ -149,6 +149,28 @@ job = start_lv2v(
 )
 ```
 
+Call a Live Runner with a multipart upload (an OpenAI-style audio endpoint)
+```python
+from livepeer_gateway import FilePart, MultipartBody, call_runner
+
+result = await call_runner(
+    runner=runner,
+    runner_url=runner.url + "/v1/audio/transcriptions",
+    multipart=MultipartBody(
+        fields={"model": "whisper-large-v3"},
+        files=[FilePart("file", "clip.wav", wav_bytes, "audio/wav")],
+    ),
+    signer_url=signer_url,
+    signer_headers=signer_headers,
+    timeout=120.0,
+)
+text = result.data["text"]
+```
+
+`payload` (JSON) and `multipart` are mutually exclusive, and multipart is POST
+or PUT only. The multipart body is held in memory so the same bytes can be
+re-sent after a 402 payment challenge.
+
 ## Token schema (base64-encoded JSON object)
 
 | Field | Type | Description |

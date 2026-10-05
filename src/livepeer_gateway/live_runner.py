@@ -29,6 +29,7 @@ from aiohttp.helpers import parse_mimetype
 from .channel_reader import ChannelReader
 from .errors import LivepeerGatewayError, LivepeerHTTPError, SignerRefreshRequired
 from .http import _post_empty, _request_body, open_stream, post_json, request_json
+from .multipart import MultipartBody
 from .remote_signer import (
     GetPaymentResponse,
     LivePaymentChallenge,
@@ -42,6 +43,7 @@ _LOG = logging.getLogger(__name__)
 _DEFAULT_HEARTBEAT_INTERVAL_S = 5.0
 _LIVE_RUNNER_PAYER_ADDRESS_HEADER = "Livepeer-Payer-Address"
 _LIVE_RUNNER_MODES = frozenset({"persistent", "single-shot"})
+_MULTIPART_METHODS = frozenset({"POST", "PUT"})
 _RUNNER_PAYMENT_TYPES_BY_UNIT = {
     "hour": "live",
     "seconds": "live",
@@ -762,6 +764,7 @@ async def call_runner(
     *,
     runner: LiveRunnerInstance | None = ...,
     payload: dict[str, Any] | None = ...,
+    multipart: MultipartBody | None = ...,
     method: str = ...,
     signer_url: str | None = ...,
     signer_headers: dict[str, str] | None = ...,
@@ -779,6 +782,7 @@ async def call_runner(
     *,
     runner: LiveRunnerInstance | None = ...,
     payload: dict[str, Any] | None = ...,
+    multipart: MultipartBody | None = ...,
     method: str = ...,
     signer_url: str | None = ...,
     signer_headers: dict[str, str] | None = ...,
@@ -795,6 +799,7 @@ async def call_runner(
     *,
     runner: LiveRunnerInstance | None = None,
     payload: dict[str, Any] | None = None,
+    multipart: MultipartBody | None = None,
     method: str = "POST",
     signer_url: str | None = None,
     signer_headers: dict[str, str] | None = None,
@@ -809,6 +814,10 @@ async def call_runner(
     paid via the signer and retried (up to ``max_payment_challenge_retries``), one job,
     one upfront payment. Raises ``LivepeerHTTPError`` on non-402 errors.
 
+    The body is either ``payload`` (JSON, ``{}`` when omitted) or ``multipart`` (a
+    ``MultipartBody``, POST or PUT only), never both. A multipart body is held in
+    memory and re-sent byte for byte after a 402 challenge.
+
     ``application/json`` and ``+json`` types parse into ``result.data``; anything else
     (an image, ndjson) comes back unparsed in ``result.content`` + ``result.content_type``.
 
@@ -817,7 +826,17 @@ async def call_runner(
     runner_url = runner_url.strip() or (runner.url.strip() if runner is not None else "")
     if not runner_url:
         raise LivepeerGatewayError("Live runner call requires runner_url")
-    request_payload = payload or {}
+    if multipart is not None:
+        if payload is not None:
+            raise LivepeerGatewayError("call_runner accepts payload or multipart, not both")
+        if method.upper() not in _MULTIPART_METHODS:
+            raise LivepeerGatewayError(
+                f"call_runner multipart requires method POST or PUT, got {method!r}"
+            )
+        body_kwargs: dict[str, Any] = {"multipart": multipart}
+    else:
+        # A JSON call always carries a body, {} when the caller gave none.
+        body_kwargs = {"payload": payload or {}}
     payment_type = _runner_payment_type(runner, payment_unit) if signer_url else ""
     max_price: LiveRunnerPriceInfo | None = None
     if signer_url and runner is not None and runner.price_info is not None:
@@ -876,8 +895,8 @@ async def call_runner(
                 session, resp = await open_stream(
                     runner_url,
                     method=method,
-                    payload=request_payload,
                     headers=request_headers or None,
+                    **body_kwargs,
                 )
                 call_stream = LiveRunnerCallStream(
                     resp.status,
@@ -903,7 +922,7 @@ async def call_runner(
                 body, content_type = await _request_body(
                     runner_url,
                     method=method,
-                    payload=request_payload,
+                    **body_kwargs,
                     **request_kwargs,
                 )
             finally:
