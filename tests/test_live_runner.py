@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import socket
 import sys
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from aiohttp import web
 
 from livepeer_gateway import live_runner
 from livepeer_gateway.errors import (
@@ -1833,3 +1837,196 @@ class TestLiveRunnerGPU:
             gpu = live_runner._detect_gpu_torch()
 
         assert gpu == LiveRunnerGPU(id="1", name="Torch GPU", vram_mb=32)
+
+
+# ---------------------------------------------------------------------------
+# call_runner against a real runner. The signer is faked; the runner is a real
+# aiohttp application on an ephemeral port.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.asynccontextmanager
+async def _serve(app: web.Application) -> AsyncIterator[str]:
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        await runner.cleanup()
+
+
+class _RecordedRequest:
+    def __init__(self, request: web.Request, body: bytes) -> None:
+        self.path = request.path
+        self.method = request.method
+        self.headers = dict(request.headers)
+        self.body = body
+
+
+class _FakePaymentSession:
+    """Stands in for LivePaymentSession: returns fixed tickets, funds forever."""
+
+    instances: list[_FakePaymentSession] = []
+
+    def __init__(self, signer_url: str, **kwargs: object) -> None:
+        self.signer_url = signer_url
+        self.kwargs = kwargs
+        type(self).instances.append(self)
+
+    async def get_payment(self) -> object:
+        return SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
+
+    async def run_payments(self) -> bool:
+        await asyncio.Event().wait()
+        return False
+
+
+@contextlib.contextmanager
+def _fake_signer() -> Iterator[None]:
+    _FakePaymentSession.instances = []
+    with (
+        mock.patch.object(live_runner, "LivePaymentSession", _FakePaymentSession),
+        mock.patch.object(
+            live_runner,
+            "get_signer_info",
+            new_callable=mock.AsyncMock,
+            return_value=SimpleNamespace(address="opaque-payer", sig="opaque-signature"),
+        ),
+    ):
+        yield
+
+
+def _runner_app(
+    seen: list[_RecordedRequest],
+    *,
+    statuses: list[int] | None = None,
+    stream: bool = False,
+) -> web.Application:
+    """A runner that answers each request with the next status in ``statuses``.
+
+    402 carries a payment challenge; 200 answers JSON, or two SSE frames when
+    ``stream`` is set.
+    """
+    pending = list(statuses or [200])
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        body = await request.read()
+        seen.append(_RecordedRequest(request, body))
+        status = pending.pop(0) if len(pending) > 1 else pending[0]
+        if status == 402:
+            return web.Response(
+                status=402,
+                text=_payment_challenge_body("manifest-1"),
+                content_type="application/json",
+            )
+        if status != 200:
+            return web.Response(status=status, text="no")
+        if stream:
+            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+            await resp.write(b"data: one\n\n")
+            await resp.write(b"data: two\n\n")
+            await resp.write_eof()
+            return resp
+        return web.json_response({"text": "hello", "n": len(seen)})
+
+    app = web.Application()
+    app.router.add_route("*", "/call", handler)
+    return app
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _paid_call(base: str, **kwargs: object):
+    return call_runner(
+        f"{base}/call",
+        payload={"prompt": "hi"},
+        signer_url="https://signer.example.com",
+        payment_unit="seconds",
+        **kwargs,
+    )
+
+
+class TestCallRunnerStreamSessionId:
+    async def test_stream_carries_manifest_id(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402, 200], stream=True)) as base:
+            with _fake_signer():
+                async with await _paid_call(base, stream=True) as stream:
+                    assert stream.session_id == "manifest-1"
+                    assert stream.payment_session is _FakePaymentSession.instances[0]
+                    lines = [line async for line in stream.aiter_lines() if line]
+
+        assert lines == ["data: one", "data: two"]
+        assert len(seen) == 2
+
+    async def test_stream_without_signer_has_empty_session_id(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, stream=True)) as base:
+            async with await call_runner(f"{base}/call", payload={}, stream=True) as stream:
+                assert stream.session_id == ""
+
+
+class TestCallRunnerPaymentSent:
+    @pytest.mark.parametrize("status", [500, 400])
+    async def test_error_after_payment_carries_the_manifest(self, status: int) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402, status])) as base:
+            with _fake_signer():
+                with pytest.raises(LivepeerHTTPError) as info:
+                    await _paid_call(base)
+        assert info.value.status_code == status
+        assert info.value.payment_sent is True
+        assert info.value.manifest_id == "manifest-1"
+        assert len(seen) == 2
+
+    @pytest.mark.parametrize("status", [400, 503])
+    async def test_error_before_payment_has_no_manifest(self, status: int) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[status])) as base:
+            with _fake_signer():
+                with pytest.raises(LivepeerHTTPError) as info:
+                    await _paid_call(base)
+        assert info.value.status_code == status
+        assert info.value.payment_sent is False
+        assert info.value.manifest_id == ""
+        assert len(seen) == 1
+
+    async def test_connection_refused_before_challenge(self) -> None:
+        with pytest.raises(LivepeerGatewayError, match="connection refused") as info:
+            await call_runner(f"http://127.0.0.1:{_free_port()}/call", payload={"prompt": "hi"})
+        assert info.value.payment_sent is False
+
+    async def test_stream_error_after_payment_says_so(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402, 500])) as base:
+            with _fake_signer():
+                with pytest.raises(LivepeerHTTPError) as info:
+                    await _paid_call(base, stream=True)
+        assert info.value.status_code == 500
+        assert info.value.payment_sent is True
+        assert info.value.manifest_id == "manifest-1"
+
+    async def test_exhausted_retries_after_payment_says_so(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402])) as base:
+            with _fake_signer():
+                with pytest.raises(LivepeerGatewayError, match="exhausted") as info:
+                    await _paid_call(base, max_payment_challenge_retries=1)
+        assert info.value.payment_sent is True
+        assert info.value.manifest_id == "manifest-1"
+
+    async def test_paid_call_without_signer_is_unpaid(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402])) as base:
+            with pytest.raises(LivepeerGatewayError, match="requires signer_url") as info:
+                await call_runner(f"{base}/call", payload={"prompt": "hi"})
+        assert info.value.payment_sent is False
+        assert info.value.manifest_id == ""

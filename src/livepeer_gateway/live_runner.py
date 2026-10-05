@@ -196,6 +196,9 @@ class LiveRunnerCallStream:
     _response: aiohttp.ClientResponse = field(repr=False, compare=False)
     # True once the orchestrator reported the backing session gone.
     released: bool = False
+    # The payment challenge's manifest_id, as LiveRunnerCallResult.session_id
+    # carries it for a unary call; "" when no challenge was answered.
+    session_id: str = ""
     _payment_task: asyncio.Task[None] | None = field(
         default=None, repr=False, compare=False
     )
@@ -807,7 +810,10 @@ async def call_runner(
 
     With ``signer_url`` set, payment is automatic and **per call**: a 402 challenge is
     paid via the signer and retried (up to ``max_payment_challenge_retries``), one job,
-    one upfront payment. Raises ``LivepeerHTTPError`` on non-402 errors.
+    one upfront payment. Raises ``LivepeerHTTPError`` on non-402 errors. Every error
+    raised from a runner request carries ``payment_sent``: True when the failed
+    attempt already carried ``Livepeer-Payment`` headers, so a gateway knows whether
+    it may still try another runner.
 
     ``application/json`` and ``+json`` types parse into ``result.data``; anything else
     (an image, ndjson) comes back unparsed in ``result.content`` + ``result.content_type``.
@@ -827,6 +833,8 @@ async def call_runner(
         signer = await get_signer_info(signer_url, _freeze_headers(signer_headers))
         payer_address = cast(str, signer.address)
     challenge: LivePaymentChallenge | None = None
+    any_payment_sent = False
+    paid_manifest_id = ""
     attempts = (max(0, int(max_payment_challenge_retries)) + 1) * 2
     for attempt in range(attempts):
         payment_session: LivePaymentSession | None = None
@@ -865,6 +873,11 @@ async def call_runner(
             # Metered pricing bills for as long as the work runs.
             needs_ongoing_funding = payment_type in _METERED_PAYMENT_TYPES
 
+        # Once tickets go out with the request, the call is bound to this runner.
+        payment_sent = "Livepeer-Payment" in request_headers
+        any_payment_sent = any_payment_sent or payment_sent
+        if payment_sent:
+            paid_manifest_id = session_id
         try:
             request_kwargs: dict[str, Any] = {"timeout": timeout}
             if request_headers:
@@ -887,6 +900,7 @@ async def call_runner(
                     None if payment_type == "fixed" else payment_session,
                     session,
                     resp,
+                    session_id=session_id,
                 )
                 # The stream outlives this call, so it owns the funding.
                 if needs_ongoing_funding:
@@ -937,13 +951,27 @@ async def call_runner(
             )
         except LivepeerHTTPError as e:
             if e.status_code != 402:
+                e.payment_sent = payment_sent
+                e.manifest_id = session_id
                 raise
             if not signer_url:
                 raise LivepeerGatewayError("Live runner paid call requires signer_url") from e
-            challenge = _parse_runner_payment_challenge(e)
+            try:
+                challenge = _parse_runner_payment_challenge(e)
+            except LivepeerGatewayError as parse_error:
+                parse_error.payment_sent = payment_sent
+                parse_error.manifest_id = session_id
+                raise
             continue
+        except LivepeerGatewayError as e:
+            e.payment_sent = payment_sent
+            e.manifest_id = session_id
+            raise
 
-    raise LivepeerGatewayError("Live runner call exhausted payment challenge retries")
+    exhausted = LivepeerGatewayError("Live runner call exhausted payment challenge retries")
+    exhausted.payment_sent = any_payment_sent
+    exhausted.manifest_id = paid_manifest_id
+    raise exhausted
 
 
 def _parse_runner_payment_challenge(error: LivepeerHTTPError) -> LivePaymentChallenge:
