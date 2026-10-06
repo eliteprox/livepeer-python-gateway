@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+import aiohttp
 
 
 class LivepeerGatewayError(RuntimeError):
@@ -37,11 +40,52 @@ class OrchestratorRejection:
     reason: str
 
 
+RunnerFailureKind = Literal["capacity", "unreachable", "other"]
+
+
 @dataclass
 class RunnerRejection:
-    """Records a single runner that was tried and rejected."""
+    """Records a single runner that was tried and rejected.
+
+    ``kind`` is ``capacity`` for an HTTP 503, ``unreachable`` when the runner
+    never answered, and ``other`` for every remaining failure. ``payment_sent``
+    is copied from the ``call_runner`` error: True only after that attempt's
+    request carried ``Livepeer-Payment`` headers. ``manifest_id`` is that
+    attempt's paid challenge id, or ``""`` when it did not pay.
+    """
+
     url: str
     reason: str
+    kind: RunnerFailureKind = "other"
+    payment_sent: bool = False
+    manifest_id: str = ""
+
+
+def runner_rejection(url: str, error: BaseException) -> RunnerRejection:
+    """Record one failed runner attempt without dropping payment or its kind."""
+    payment_sent = False
+    manifest_id = ""
+    if isinstance(error, LivepeerGatewayError) and error.payment_sent:
+        payment_sent = True
+        manifest_id = error.manifest_id
+    return RunnerRejection(
+        url=url,
+        reason=str(error),
+        kind=_runner_failure_kind(error),
+        payment_sent=payment_sent,
+        manifest_id=manifest_id,
+    )
+
+
+def _runner_failure_kind(error: BaseException) -> RunnerFailureKind:
+    if isinstance(error, LivepeerHTTPError) and error.status_code == 503:
+        return "capacity"
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, (TimeoutError, ConnectionError, OSError, aiohttp.ClientConnectionError)):
+            return "unreachable"
+        current = current.__cause__
+    return "other"
 
 
 class NoOrchestratorAvailableError(LivepeerGatewayError):
@@ -65,6 +109,9 @@ class NoRunnerAvailableError(LivepeerGatewayError):
     def __init__(self, message: str, rejections: list[RunnerRejection] | None = None) -> None:
         super().__init__(message)
         self.rejections: list[RunnerRejection] = rejections or []
+        paid = [rejection for rejection in self.rejections if rejection.payment_sent]
+        self.payment_sent = bool(paid)
+        self.manifest_id = paid[-1].manifest_id if paid else ""
 
     def __str__(self) -> str:
         message = super().__str__()

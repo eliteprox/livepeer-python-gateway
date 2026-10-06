@@ -5,7 +5,7 @@ from unittest import mock
 import pytest
 
 from livepeer_gateway import selection
-from livepeer_gateway.errors import LivepeerGatewayError, NoRunnerAvailableError
+from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError, NoRunnerAvailableError
 from livepeer_gateway.live_runner import LiveRunnerCallResult, LiveRunnerInstance
 
 
@@ -178,6 +178,56 @@ class TestRunnerSelection:
         assert len(cursor.rejections) == 1
         assert cursor.rejections[0].url == "https://orch-a/apps/a/session"
         assert cursor.rejections[0].reason == "capacity exhausted"
+        assert cursor.rejections[0].kind == "other"
+        assert cursor.rejections[0].payment_sent is False
+
+    async def test_runner_selector_keeps_payment_and_failure_kind(self) -> None:
+        async def _call_runner(
+            *,
+            runner: LiveRunnerInstance,
+            payload: dict[str, object],
+            method: str,
+            timeout: float,
+        ) -> LiveRunnerCallResult:
+            del payload, method, timeout
+            if runner.url.endswith("/a/session"):
+                refused = LivepeerHTTPError(503, runner.url, "busy")
+                refused.payment_sent = True
+                refused.manifest_id = "manifest-1"
+                raise refused
+            try:
+                raise LivepeerGatewayError("connection refused") from ConnectionRefusedError()
+            except LivepeerGatewayError as unreachable:
+                raise unreachable
+
+        with (
+            mock.patch.object(
+                selection,
+                "discover_runners",
+                return_value=[
+                    _entry(
+                        [
+                            {"url": "https://orch-a/apps/a/session", "app": "app-a"},
+                            {"url": "https://orch-a/apps/b/session", "app": "app-b"},
+                        ]
+                    )
+                ],
+            ),
+            mock.patch.object(selection, "call_runner", side_effect=_call_runner),
+        ):
+            cursor = await selection.runner_selector(
+                discovery_url="https://example.com/discovery"
+            )
+            with pytest.raises(NoRunnerAvailableError) as raised:
+                await cursor.next()
+
+        assert cursor.rejections[0].kind == "capacity"
+        assert cursor.rejections[0].payment_sent is True
+        assert cursor.rejections[0].manifest_id == "manifest-1"
+        assert cursor.rejections[1].kind == "unreachable"
+        assert cursor.rejections[1].payment_sent is False
+        assert raised.value.payment_sent is True
+        assert raised.value.manifest_id == "manifest-1"
 
     async def test_runner_selector_empty_discovery_raises_no_runner_available(
         self,

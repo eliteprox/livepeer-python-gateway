@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, Sequence
 
-from .errors import LivepeerGatewayError, NoRunnerAvailableError, RunnerRejection
+from .errors import LivepeerGatewayError, NoRunnerAvailableError, runner_rejection
 from .http import post_json
 from .lv2v import LiveVideoToVideo, StartJobRequest
 from .selection import runner_selector
@@ -129,12 +129,11 @@ async def _start_scope_with_runner(
                 raise LivepeerGatewayError("Scope response missing manifest_id")
             return job
         except Exception as e:
-            reason = str(e)
             runner_url = result.runner_url.strip()
             if not runner_url and result.runner is not None:
                 runner_url = result.runner.url
-            _LOG.debug("scope runner startup failed: %s (%s)", runner_url, reason)
-            cursor.rejections.append(RunnerRejection(url=runner_url, reason=reason))
+            _LOG.debug("scope runner startup failed: %s (%s)", runner_url, e)
+            cursor.rejections.append(runner_rejection(runner_url, e))
 
 
 def _is_serverless_runner(runner: object) -> bool:

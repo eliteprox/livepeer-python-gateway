@@ -18,6 +18,7 @@ from .errors import (
     NoRunnerAvailableError,
     OrchestratorRejection,
     RunnerRejection,
+    runner_rejection,
 )
 from .live_runner import (
     LiveRunnerCallResult,
@@ -205,13 +206,12 @@ class RunnerSelectionCursor:
                     kwargs["signer_headers"] = self._signer_headers
                 result = await call_runner(**kwargs)
             except Exception as e:
-                reason = str(e)
                 _LOG.debug(
                     "select_runner candidate failed: %s (%s)",
                     runner.url,
-                    reason,
+                    e,
                 )
-                self.rejections.append(RunnerRejection(url=runner.url, reason=reason))
+                self.rejections.append(runner_rejection(runner.url, e))
                 continue
 
             _LOG.debug("select_runner selected: %s", runner.url)
