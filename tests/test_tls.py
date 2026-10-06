@@ -1,9 +1,9 @@
 """Opt-in TLS certificate verification.
 
 The tests serve a real aiohttp application over a self-signed certificate
-(``tests/fixtures/selfsigned.*``, valid until 2126). By default the SDK accepts
-it, as it accepts the self-signed certificates orchestrators serve; with
-``VERIFY_TLS`` on, every HTTP path refuses it before sending a request.
+generated for the test. By default the SDK accepts it, as it accepts the
+self-signed certificates orchestrators serve; with ``VERIFY_TLS`` on, every
+HTTP path refuses it before sending a request.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import asyncio
 import contextlib
 import pathlib
 import ssl
+import subprocess
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
@@ -23,7 +25,36 @@ from livepeer_gateway.errors import LivepeerGatewayError
 from livepeer_gateway.live_runner import call_runner
 from livepeer_gateway.remote_signer import RemoteSignerError, get_signer_info
 
-_FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+def _write_self_signed(directory: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    """Write a throwaway self-signed cert and key for ``127.0.0.1``."""
+    cert = directory / "selfsigned.crt"
+    key = directory / "selfsigned.key"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1,DNS:localhost",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert, key
 
 
 class TestVerifyTlsSetting:
@@ -69,18 +100,20 @@ def verify_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @contextlib.asynccontextmanager
 async def _serve_tls(app: web.Application) -> AsyncIterator[str]:
-    """Serve ``app`` over the self-signed certificate on an ephemeral port."""
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_ctx.load_cert_chain(_FIXTURES / "selfsigned.crt", _FIXTURES / "selfsigned.key")
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
-    try:
-        yield f"https://127.0.0.1:{port}"
-    finally:
-        await runner.cleanup()
+    """Serve ``app`` over a generated self-signed certificate on an ephemeral port."""
+    with tempfile.TemporaryDirectory() as directory:
+        cert, key = _write_self_signed(pathlib.Path(directory))
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_ctx.load_cert_chain(cert, key)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+        try:
+            yield f"https://127.0.0.1:{port}"
+        finally:
+            await runner.cleanup()
 
 
 def _app(calls: list[str]) -> web.Application:
