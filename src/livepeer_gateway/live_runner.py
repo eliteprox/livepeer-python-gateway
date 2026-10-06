@@ -319,6 +319,7 @@ class LiveRunnerRegistration:
         self.o2r_channel: LiveRunnerTrickleChannel | None = None
         self._o2r_reader: ChannelReader | None = None
         self._closed = False
+        self._heartbeat_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._o2r_task: asyncio.Task[None] | None = None
 
@@ -331,6 +332,22 @@ class LiveRunnerRegistration:
     def active_session_ids(self) -> tuple[str, ...]:
         # Return an immutable snapshot; internal storage stays list-backed to preserve reservation order.
         return tuple(self._active_session_ids)
+
+    async def update(
+        self,
+        *,
+        metadata: str | None = None,
+        capacity: int | None = None,
+    ) -> None:
+        """Replace advertised metadata or capacity and heartbeat immediately."""
+        if metadata is not None:
+            self._metadata = metadata
+        if capacity is not None:
+            self._capacity = int(capacity)
+        if self._closed or self._heartbeat_secret is None:
+            return
+        async with self._heartbeat_lock:
+            await self._send_heartbeat()
 
     async def close(self) -> None:
         self._closed = True
@@ -471,7 +488,8 @@ class LiveRunnerRegistration:
             if self._closed:
                 return
             try:
-                await self._send_heartbeat()
+                async with self._heartbeat_lock:
+                    await self._send_heartbeat()
             except LivepeerGatewayError as exc:
                 _LOG.warning("Live runner heartbeat failed; retrying on next interval: %s", exc)
             except Exception:
@@ -601,6 +619,11 @@ class LiveRunnerRegistration:
             self._active_session_ids.remove(session_id)
         except ValueError:
             _LOG.debug("Live runner session %s was already released", session_id)
+
+    async def note_session_ended(self, session_id: str) -> None:
+        """Drop a session this runner ended and heartbeat so capacity_used matches."""
+        self._release_session_id(session_id)
+        await self.update()
 
 
 async def register_runner(

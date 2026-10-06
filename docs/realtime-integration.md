@@ -7,7 +7,7 @@ The client is `examples/realtime_client.py`.
 | Short name | App id | Presets | Extra fields |
 | --- | --- | --- | --- |
 | `sd-turbo` | `comfystream/sd-turbo` | `neon-stage`, `watercolor`, `anime` | `prompt`, `negative_prompt` |
-| `flux-klein` | `livepeer-example/flux-klein` | `neon-stage`, `watercolor`, `cosmic` | `prompt`, `seed`, `input_blend` |
+| `flux-klein` | `comfystream/flux-klein` | `neon-stage`, `watercolor`, `cosmic` | `prompt`, `seed`, `input_blend` |
 
 `seed` of `-1` picks new noise every frame. `input_blend` is the camera weight from 0 to 1. A field the app does not accept returns `unsupported_param`.
 

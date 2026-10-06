@@ -12,7 +12,6 @@ from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from . import lp_rpc_pb2
 from .async_cache import async_lru_cache
 from .errors import (
     LivepeerGatewayError,
@@ -405,6 +404,8 @@ class PaymentSession:
 
         # Offchain mode: still send the expected headers, but with empty content.
         if not self._signer_url:
+            from . import lp_rpc_pb2
+
             seg = lp_rpc_pb2.SegData()
             if not self._info.HasField("auth_token"):
                 raise PaymentError(

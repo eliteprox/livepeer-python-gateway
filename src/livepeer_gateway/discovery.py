@@ -6,7 +6,6 @@ from typing import Any
 from collections.abc import Sequence
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
-from . import lp_rpc_pb2
 from .capabilities import capabilities_to_query
 from .errors import LivepeerGatewayError
 from .remote_signer import RemoteSignerError

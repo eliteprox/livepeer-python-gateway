@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
-from . import lp_rpc_pb2
 from .capabilities import CapabilityId, build_capabilities
 from .channel_writer import ChannelWriter
 from .control import Control, ControlConfig, ControlMode

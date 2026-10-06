@@ -10,10 +10,6 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-import grpc
-
-from . import lp_rpc_pb2
-from . import lp_rpc_pb2_grpc
 from .errors import LivepeerGatewayError
 from .remote_signer import _freeze_headers, _hex_to_bytes, get_orch_info_sig
 
@@ -46,6 +42,9 @@ def create_orchestrator_stub(
     *,
     use_tofu: bool = True,
 ) -> Tuple[grpc.Channel, lp_rpc_pb2_grpc.OrchestratorStub]:
+    import grpc
+    from . import lp_rpc_pb2_grpc
+
     # Always use TLS. TOFU can be disabled to use gRPC's default CA trust store.
     target = _parse_grpc_target(orch_url)
     if use_tofu:
@@ -70,6 +69,8 @@ def call_get_orchestrator(
     request: lp_rpc_pb2.OrchestratorRequest,
     orch_url: str,
 ) -> lp_rpc_pb2.OrchestratorInfo:
+    import grpc
+
     try:
         return stub.GetOrchestrator(request, timeout=5.0)
     except grpc.RpcError as e:
@@ -108,6 +109,8 @@ def get_orch_info(
     - With TOFU enabled, it trusts the first observed server certificate per target.
     - With TOFU disabled, it uses gRPC's default system CA trust roots.
     """
+    from . import lp_rpc_pb2
+
     _LOG.debug(
         "Fetching orchestrator info orch=%s signer=%s capabilities=%s use_tofu=%s",
         orch_url,

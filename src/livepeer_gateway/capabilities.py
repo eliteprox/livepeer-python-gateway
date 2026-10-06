@@ -3,9 +3,6 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import Any, Mapping, Optional
 
-from . import lp_rpc_pb2
-
-
 class CapabilityId(IntEnum):
     INVALID = -2
     UNUSED = -1
@@ -126,10 +123,12 @@ def get_capacity_in_use(model_constraint: Any) -> int:
 def build_capabilities(
     capability: CapabilityId,
     constraint: Optional[str],
-) -> lp_rpc_pb2.Capabilities:
+):
     """
     Build a capabilities message with an optional per-capability model constraint.
     """
+    from . import lp_rpc_pb2
+
     caps = lp_rpc_pb2.Capabilities()
     cap_id = int(capability)
     caps.capacities[cap_id] = 1

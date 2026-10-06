@@ -65,6 +65,72 @@
                 "/tmp/e2e/flux-klein-out.ts"
             ],
             "justMyCode": true
+        },
+        {
+            "name": "Realtime: sd-turbo prompt",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/examples/realtime_client.py",
+            "console": "integratedTerminal",
+            "python": "/livepeer/ai/runner-app-examples/flux-klein/.venv/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--update",
+                "--token",
+                "${env:TOKEN}",
+                "--app",
+                "sd-turbo",
+                "--prompt",
+                "${input:sdTurboPrompt}"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Realtime: flux-klein prompt",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/examples/realtime_client.py",
+            "console": "integratedTerminal",
+            "python": "/livepeer/ai/runner-app-examples/flux-klein/.venv/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--update",
+                "--token",
+                "${env:TOKEN}",
+                "--app",
+                "flux-klein",
+                "--prompt",
+                "${input:fluxKleinPrompt}",
+                "--input-blend",
+                "${input:fluxKleinBlend}"
+            ],
+            "justMyCode": true
+        }
+    ],
+    "inputs": [
+        {
+            "id": "sdTurboPrompt",
+            "type": "promptString",
+            "description": "New sd-turbo prompt",
+            "default": "a soft watercolor painting, flowing pastel colors, paper texture"
+        },
+        {
+            "id": "fluxKleinPrompt",
+            "type": "promptString",
+            "description": "New flux-klein prompt",
+            "default": "a neon-lit concert stage, laser beams, vivid magenta and cyan"
+        },
+        {
+            "id": "fluxKleinBlend",
+            "type": "promptString",
+            "description": "flux-klein camera weight, 0 to 1",
+            "default": "0.4"
         }
     ]
 }

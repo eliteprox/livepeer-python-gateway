@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Sequence
 from typing import Any, Optional
 
-from . import lp_rpc_pb2
 from .discovery import (
     FilterValue,
     discover_orchestrator_runners,

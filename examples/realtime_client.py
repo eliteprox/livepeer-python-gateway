@@ -8,22 +8,25 @@ The request is a prompt and/or a preset. No workflow document is sent.
     --app comfystream/sd-turbo --preset neon-stage
 
   python examples/realtime_client.py \\
-    --generate-frames 900 --app livepeer-example/flux-klein --preset cosmic
+    --generate-frames 900 --app comfystream/flux-klein --preset cosmic
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
+import re
 import sys
 import time
 from contextlib import nullcontext, suppress
 from fractions import Fraction
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import av
-from livepeer_gateway.discovery import discover_orchestrators
+from livepeer_gateway.discovery import discover_orchestrator_runners, discover_orchestrators
 from livepeer_gateway.errors import LivepeerGatewayError
 from livepeer_gateway.http import post_json
 from livepeer_gateway.live_runner import stop_runner_session
@@ -34,7 +37,7 @@ from livepeer_gateway.token import parse_token
 
 APPS = {
     "sd-turbo": "comfystream/sd-turbo",
-    "flux-klein": "livepeer-example/flux-klein",
+    "flux-klein": "comfystream/flux-klein",
 }
 
 
@@ -102,11 +105,59 @@ def _parse_args() -> argparse.Namespace:
         metavar="SECONDS=PROMPT",
         help="Change the prompt mid-session, e.g. --reprompt 5=an oil painting.",
     )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="POST /update on the gateway session this app already has open.",
+    )
     return parser.parse_args()
 
 
 def _app_id(name: str) -> str:
     return APPS.get(name, name)
+
+
+def _session_record_path(app_name: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", app_name)
+    return Path("/tmp/livepeer-realtime") / f"{safe}.json"
+
+
+def _remember_session(app_name: str, session) -> None:
+    path = _session_record_path(app_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"app": app_name, "session_id": session.session_id, "app_url": session.app_url}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _forget_session(app_name: str) -> None:
+    _session_record_path(app_name).unlink(missing_ok=True)
+
+
+def _orchestrators(token: dict) -> list:
+    # The signer discovery endpoint drops results when an app filter is appended.
+    return token.get("orchestrators") or discover_orchestrators(
+        signer_url=token.get("signer"),
+        signer_headers=token.get("signer_headers"),
+        discovery_url=token.get("discovery"),
+        discovery_headers=token.get("discovery_headers"),
+    )
+
+
+def _served_by(app_url: str, orchestrators: list) -> bool:
+    host = urlsplit(app_url).netloc
+    if not host:
+        return False
+    for orchestrator in orchestrators:
+        if not isinstance(orchestrator, str) or not orchestrator.strip():
+            continue
+        candidate = orchestrator if "://" in orchestrator else f"https://{orchestrator}"
+        if urlsplit(candidate).netloc == host or host in orchestrator:
+            return True
+    return False
 
 
 def _stream_body(args: argparse.Namespace) -> dict[str, object]:
@@ -241,8 +292,82 @@ async def _publish(input_path: Path, publish_url: str, *, fps: float, max_frames
         await publisher.close()
 
 
+async def _log_discovered_compute(orchestrators: list, app: str) -> None:
+    try:
+        entries = await discover_orchestrator_runners(orchestrators, app=app)
+    except Exception as exc:
+        _log("discovery metadata unavailable:", exc)
+        return
+    for entry in entries:
+        runners = entry.get("runners") if isinstance(entry, dict) else None
+        if not isinstance(runners, list):
+            continue
+        for runner in runners:
+            if not isinstance(runner, dict) or runner.get("app") != app:
+                continue
+            raw = runner.get("metadata") or ""
+            compute = "unknown"
+            startup = None
+            if isinstance(raw, str) and raw.startswith("{"):
+                try:
+                    meta = json.loads(raw)
+                except json.JSONDecodeError:
+                    meta = {}
+                compute = str(meta.get("compute") or "unknown")
+                startup = meta.get("estimated_startup_s")
+            _log(
+                "discovered",
+                app,
+                "compute:",
+                compute,
+                "estimated_startup_s:",
+                startup,
+                "capacity:",
+                runner.get("capacity"),
+                "used:",
+                runner.get("capacity_used"),
+            )
+            return
+
+
+async def _update_running(args: argparse.Namespace) -> None:
+    """POST /update on the app_url from the open gateway session.
+
+    Same route family as /stream at start and stop_runner_session at the end.
+    The orchestrator adds the session header. This does not call the runner host.
+    """
+    body = _stream_body(args)
+    if not body:
+        raise SystemExit("--update needs --prompt, --preset, or another param")
+    if not args.token.strip():
+        raise SystemExit("set TOKEN or pass --token")
+    token = parse_token(args.token)
+    orchestrators = _orchestrators(token)
+    path = _session_record_path(args.app)
+    if not path.exists():
+        raise SystemExit(f"no open gateway session for {args.app}; start the stream first")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    app_url = record.get("app_url") if isinstance(record, dict) else None
+    if not isinstance(app_url, str) or not app_url:
+        raise SystemExit(f"session record {path} has no app_url")
+    if not _served_by(app_url, orchestrators):
+        raise SystemExit("open session is not on an orchestrator from TOKEN discovery")
+    updated = await post_json(f"{app_url.rstrip('/')}/update", body, timeout=60.0)
+    _log(
+        "updated",
+        record.get("session_id"),
+        "preset:",
+        updated.get("preset"),
+        "params:",
+        updated.get("params"),
+    )
+
+
 async def main() -> None:
     args = _parse_args()
+    if args.update:
+        await _update_running(args)
+        return
     if not args.token.strip():
         raise SystemExit("set TOKEN or pass --token")
     generate = args.generate_frames
@@ -263,14 +388,8 @@ async def main() -> None:
     session = None
     reprompt_task = None
     try:
-        # The signer discovery endpoint drops results when an app filter is
-        # appended, so resolve the orchestrator list first and filter locally.
-        orchestrators = token.get("orchestrators") or discover_orchestrators(
-            signer_url=token.get("signer"),
-            signer_headers=token.get("signer_headers"),
-            discovery_url=token.get("discovery"),
-            discovery_headers=token.get("discovery_headers"),
-        )
+        orchestrators = _orchestrators(token)
+        await _log_discovered_compute(orchestrators, app)
         session = await reserve_session(
             orchestrators=orchestrators,
             signer_url=token.get("signer"),
@@ -278,6 +397,7 @@ async def main() -> None:
             app=app,
             timeout=60.0,
         )
+        _remember_session(args.app, session)
         _log("session_id:", session.session_id, "app_url:", session.app_url)
         started = await post_json(
             f"{session.app_url.rstrip('/')}/stream",
@@ -330,6 +450,7 @@ async def main() -> None:
             with suppress(asyncio.CancelledError, Exception):
                 await reprompt_task
         if session is not None:
+            _forget_session(args.app)
             with suppress(Exception):
                 await stop_runner_session(session)
 
