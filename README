@@ -116,6 +116,13 @@ uv sync --extra examples
 uv run examples/in_out_composite.py localhost:8935
 ```
 
+Send a clip or synthetic frames to a persistent realtime runner (`sd-turbo`, `flux-klein`). See [docs/realtime-integration.md](docs/realtime-integration.md).
+
+```bash
+export TOKEN='<base64-token>'
+uv run examples/realtime_client.py clip.mp4 --app sd-turbo --preset neon-stage
+```
+
 Subscribe to a LiveVideoToVideo trickle events channel
 ```bash
 uv run examples/subscribe_events.py localhost:8935
