@@ -19,6 +19,10 @@ def test_update_changes_the_next_heartbeat_payload():
     payload = registration._payload()
     assert payload["metadata"] == '{"compute":"warm"}'
     assert payload["capacity"] == 1
+    assert payload["status"] == "ready"
+
+    asyncio.run(registration.update(status=" Busy "))
+    assert registration._payload()["status"] == "busy"
 
 
 def test_note_session_ended_removes_the_session_from_the_heartbeat():

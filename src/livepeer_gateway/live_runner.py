@@ -338,12 +338,19 @@ class LiveRunnerRegistration:
         *,
         metadata: str | None = None,
         capacity: int | None = None,
+        status: str | None = None,
     ) -> None:
-        """Replace advertised metadata or capacity and heartbeat immediately."""
+        """Replace advertised metadata, capacity or status and heartbeat immediately.
+
+        The orchestrator routes only ``ready`` runners: any other status hides the
+        runner from discovery and refuses new and existing session lookups.
+        """
         if metadata is not None:
             self._metadata = metadata
         if capacity is not None:
             self._capacity = int(capacity)
+        if status is not None:
+            self._status = status.strip().lower()
         if self._closed or self._heartbeat_secret is None:
             return
         async with self._heartbeat_lock:
