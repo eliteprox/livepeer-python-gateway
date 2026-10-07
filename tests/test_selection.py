@@ -193,7 +193,7 @@ class TestRunnerSelection:
             if runner.url.endswith("/a/session"):
                 refused = LivepeerHTTPError(503, runner.url, "busy")
                 refused.payment_sent = True
-                refused.manifest_id = "manifest-1"
+                refused.auth_ids = ("auth-1",)
                 raise refused
             try:
                 raise LivepeerGatewayError("connection refused") from ConnectionRefusedError()
@@ -223,11 +223,11 @@ class TestRunnerSelection:
 
         assert cursor.rejections[0].kind == "capacity"
         assert cursor.rejections[0].payment_sent is True
-        assert cursor.rejections[0].manifest_id == "manifest-1"
+        assert cursor.rejections[0].auth_ids == ("auth-1",)
         assert cursor.rejections[1].kind == "unreachable"
         assert cursor.rejections[1].payment_sent is False
         assert raised.value.payment_sent is True
-        assert raised.value.manifest_id == "manifest-1"
+        assert raised.value.auth_ids == ("auth-1",)
 
     async def test_runner_selector_empty_discovery_raises_no_runner_available(
         self,

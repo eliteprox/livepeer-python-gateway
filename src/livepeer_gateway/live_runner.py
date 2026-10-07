@@ -176,6 +176,9 @@ class LiveRunnerCallResult:
     # Non-JSON responses (an image, say) arrive unparsed in `content`; `data` stays empty.
     content: bytes | None = field(default=None, repr=False)
     content_type: str = ""
+    # Signer auth ids of every payment session this call opened. Fixed-price
+    # calls still list them here, because their payment_session is not returned.
+    auth_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -198,7 +201,10 @@ class LiveRunnerCallStream:
     released: bool = False
     # The payment challenge's manifest_id, as LiveRunnerCallResult.session_id
     # carries it for a unary call; "" when no challenge was answered.
+    # Correlation with the orchestrator, not a billing key.
     session_id: str = ""
+    # Signer auth ids of every payment session this call opened.
+    auth_ids: tuple[str, ...] = ()
     _payment_task: asyncio.Task[None] | None = field(
         default=None, repr=False, compare=False
     )
@@ -813,7 +819,8 @@ async def call_runner(
     one upfront payment. Raises ``LivepeerHTTPError`` on non-402 errors. Every error
     raised from a runner request carries ``payment_sent``: True when the failed
     attempt already carried ``Livepeer-Payment`` headers, so a gateway knows whether
-    it may still try another runner.
+    it may still try another runner. Results, streams, and those errors also carry
+    ``auth_ids``, the signer auth id of every payment session the call opened.
 
     ``application/json`` and ``+json`` types parse into ``result.data``; anything else
     (an image, ndjson) comes back unparsed in ``result.content`` + ``result.content_type``.
@@ -834,8 +841,14 @@ async def call_runner(
         payer_address = cast(str, signer.address)
     challenge: LivePaymentChallenge | None = None
     any_payment_sent = False
-    paid_manifest_id = ""
+    auth_ids: list[str] = []
     attempts = (max(0, int(max_payment_challenge_retries)) + 1) * 2
+
+    def remember_auth_id(session: LivePaymentSession | None) -> None:
+        if session is None or not session.auth_id or session.auth_id in auth_ids:
+            return
+        auth_ids.append(session.auth_id)
+
     for attempt in range(attempts):
         payment_session: LivePaymentSession | None = None
         session_id = ""
@@ -858,6 +871,7 @@ async def call_runner(
                 )
             except SignerRefreshRequired as e:
                 if attempt + 1 >= attempts:
+                    e.auth_ids = tuple(auth_ids)
                     raise
                 # Could happen if embedded payment params expire; just retry in this case.
                 _LOG.info(
@@ -866,6 +880,13 @@ async def call_runner(
                 )
                 challenge = None
                 continue
+            except LivepeerGatewayError as e:
+                for auth_id in e.auth_ids:
+                    if auth_id not in auth_ids:
+                        auth_ids.append(auth_id)
+                e.auth_ids = tuple(auth_ids)
+                raise
+            remember_auth_id(payment_session)
             request_headers["Livepeer-Payment"] = payment.payment
             request_headers["Livepeer-Segment"] = payment.seg_creds or ""
             session_id = challenge.manifest_id
@@ -876,8 +897,11 @@ async def call_runner(
         # Once tickets go out with the request, the call is bound to this runner.
         payment_sent = "Livepeer-Payment" in request_headers
         any_payment_sent = any_payment_sent or payment_sent
-        if payment_sent:
-            paid_manifest_id = session_id
+
+        def stamp(error: LivepeerGatewayError) -> None:
+            error.payment_sent = payment_sent
+            error.auth_ids = tuple(auth_ids)
+
         try:
             request_kwargs: dict[str, Any] = {"timeout": timeout}
             if request_headers:
@@ -901,6 +925,7 @@ async def call_runner(
                     session,
                     resp,
                     session_id=session_id,
+                    auth_ids=tuple(auth_ids),
                 )
                 # The stream outlives this call, so it owns the funding.
                 if needs_ongoing_funding:
@@ -948,29 +973,29 @@ async def call_runner(
                 payment_session=None if payment_type == "fixed" else payment_session,
                 content=None if is_json else body,
                 content_type=content_type,
+                auth_ids=tuple(auth_ids),
             )
         except LivepeerHTTPError as e:
             if e.status_code != 402:
-                e.payment_sent = payment_sent
-                e.manifest_id = session_id
+                stamp(e)
                 raise
             if not signer_url:
-                raise LivepeerGatewayError("Live runner paid call requires signer_url") from e
+                unpaid = LivepeerGatewayError("Live runner paid call requires signer_url")
+                stamp(unpaid)
+                raise unpaid from e
             try:
                 challenge = _parse_runner_payment_challenge(e)
             except LivepeerGatewayError as parse_error:
-                parse_error.payment_sent = payment_sent
-                parse_error.manifest_id = session_id
+                stamp(parse_error)
                 raise
             continue
         except LivepeerGatewayError as e:
-            e.payment_sent = payment_sent
-            e.manifest_id = session_id
+            stamp(e)
             raise
 
     exhausted = LivepeerGatewayError("Live runner call exhausted payment challenge retries")
     exhausted.payment_sent = any_payment_sent
-    exhausted.manifest_id = paid_manifest_id
+    exhausted.auth_ids = tuple(auth_ids)
     raise exhausted
 
 
@@ -1039,12 +1064,24 @@ async def _get_runner_payment(
         app=app,
         max_price=max_price.to_json() if max_price is not None else None,
     )
-    payment = await session.get_payment()
+    try:
+        payment = await session.get_payment()
+    except LivepeerGatewayError as error:
+        error.auth_ids = _signed_auth_ids(session)
+        raise
     if not payment.payment:
-        raise LivepeerGatewayError("Live runner payment response missing payment")
+        missing = LivepeerGatewayError("Live runner payment response missing payment")
+        missing.auth_ids = _signed_auth_ids(session)
+        raise missing
     if not payment.seg_creds:
-        raise LivepeerGatewayError("Live runner payment response missing segCreds")
+        missing = LivepeerGatewayError("Live runner payment response missing segCreds")
+        missing.auth_ids = _signed_auth_ids(session)
+        raise missing
     return session, payment
+
+
+def _signed_auth_ids(session: LivePaymentSession) -> tuple[str, ...]:
+    return (session.auth_id,) if session.auth_id else ()
 
 
 def _runner_payment_type(

@@ -14,13 +14,13 @@ class LivepeerGatewayError(RuntimeError):
     challenge had already been answered. A gateway may retry another runner only
     while it is False; once tickets are sent the request is bound to that runner.
 
-    ``manifest_id`` is the answered payment challenge's ``manifest_id`` when
-    ``payment_sent`` is True, and ``""`` otherwise, so a gateway can attribute
-    the cost of a paid call that failed.
+    ``auth_ids`` are the signer auth ids of every payment session this call
+    opened. The signer charges an allocation when it signs, which can be before
+    ``payment_sent`` becomes True. Empty when no session was signed.
     """
 
     payment_sent: bool = False
-    manifest_id: str = ""
+    auth_ids: tuple[str, ...] = ()
 
 
 class LivepeerHTTPError(LivepeerGatewayError):
@@ -50,30 +50,30 @@ class RunnerRejection:
     ``kind`` is ``capacity`` for an HTTP 503, ``unreachable`` when the runner
     never answered, and ``other`` for every remaining failure. ``payment_sent``
     is copied from the ``call_runner`` error: True only after that attempt's
-    request carried ``Livepeer-Payment`` headers. ``manifest_id`` is that
-    attempt's paid challenge id, or ``""`` when it did not pay.
+    request carried ``Livepeer-Payment`` headers. ``auth_ids`` are the signer
+    auth ids that attempt opened, which can be set before ``payment_sent``.
     """
 
     url: str
     reason: str
     kind: RunnerFailureKind = "other"
     payment_sent: bool = False
-    manifest_id: str = ""
+    auth_ids: tuple[str, ...] = ()
 
 
 def runner_rejection(url: str, error: BaseException) -> RunnerRejection:
     """Record one failed runner attempt without dropping payment or its kind."""
     payment_sent = False
-    manifest_id = ""
-    if isinstance(error, LivepeerGatewayError) and error.payment_sent:
-        payment_sent = True
-        manifest_id = error.manifest_id
+    auth_ids: tuple[str, ...] = ()
+    if isinstance(error, LivepeerGatewayError):
+        payment_sent = error.payment_sent
+        auth_ids = error.auth_ids
     return RunnerRejection(
         url=url,
         reason=str(error),
         kind=_runner_failure_kind(error),
         payment_sent=payment_sent,
-        manifest_id=manifest_id,
+        auth_ids=auth_ids,
     )
 
 
@@ -111,7 +111,12 @@ class NoRunnerAvailableError(LivepeerGatewayError):
         self.rejections: list[RunnerRejection] = rejections or []
         paid = [rejection for rejection in self.rejections if rejection.payment_sent]
         self.payment_sent = bool(paid)
-        self.manifest_id = paid[-1].manifest_id if paid else ""
+        auth_ids: list[str] = []
+        for rejection in self.rejections:
+            for auth_id in rejection.auth_ids:
+                if auth_id not in auth_ids:
+                    auth_ids.append(auth_id)
+        self.auth_ids = tuple(auth_ids)
 
     def __str__(self) -> str:
         message = super().__str__()

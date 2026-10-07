@@ -40,13 +40,13 @@ def test_no_orchestrator_available_error_includes_rejections() -> None:
 def test_paid_503_is_a_capacity_rejection() -> None:
     error = LivepeerHTTPError(503, "https://runner.example.com", "busy")
     error.payment_sent = True
-    error.manifest_id = "manifest-1"
+    error.auth_ids = ("auth-1",)
 
     rejection = runner_rejection("https://runner.example.com", error)
 
     assert rejection.kind == "capacity"
     assert rejection.payment_sent is True
-    assert rejection.manifest_id == "manifest-1"
+    assert rejection.auth_ids == ("auth-1",)
     assert rejection.reason == str(error)
 
 
@@ -57,7 +57,7 @@ def test_http_400_is_another_kind_of_rejection() -> None:
 
     assert rejection.kind == "other"
     assert rejection.payment_sent is False
-    assert rejection.manifest_id == ""
+    assert rejection.auth_ids == ()
 
 
 def test_connection_refused_is_unreachable() -> None:
@@ -98,18 +98,29 @@ def test_text_mentioning_capacity_is_not_a_capacity_refusal() -> None:
 
 def test_no_runner_available_keeps_the_paid_rejection() -> None:
     error = NoRunnerAvailableError(
-        "All runners failed (1 tried)",
+        "All runners failed (2 tried)",
         rejections=[
             RunnerRejection(
                 url="https://runner.example.com",
                 reason="busy",
                 kind="capacity",
                 payment_sent=True,
-                manifest_id="manifest-1",
-            )
+                auth_ids=("auth-1",),
+            ),
+            RunnerRejection(
+                url="https://runner-b.example.com",
+                reason="busy",
+                kind="capacity",
+                payment_sent=True,
+                auth_ids=("auth-2",),
+            ),
         ],
     )
 
     assert error.payment_sent is True
-    assert error.manifest_id == "manifest-1"
-    assert str(error) == "All runners failed (1 tried): https://runner.example.com: busy"
+    assert error.auth_ids == ("auth-1", "auth-2")
+    assert str(error) == (
+        "All runners failed (2 tried): "
+        "https://runner.example.com: busy; "
+        "https://runner-b.example.com: busy"
+    )

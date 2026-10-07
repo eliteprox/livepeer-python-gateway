@@ -301,6 +301,8 @@ class TestLiveRunnerSession:
                 payment_sessions.append(self)
                 sessions.append({"signer_url": signer_url, **kwargs})
 
+            auth_id = ""
+
             async def get_payment(self) -> object:
                 return SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
 
@@ -396,6 +398,8 @@ class TestLiveRunnerSession:
         )
 
         class _PaymentSession:
+            auth_id = ""
+
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 sessions.append({"signer_url": signer_url, **kwargs})
 
@@ -469,6 +473,7 @@ class TestLiveRunnerSession:
         class _PaymentSession:
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 sessions.append({"signer_url": signer_url, **kwargs})
+                self.auth_id = f"auth-{len(sessions)}"
 
             async def get_payment(self) -> object:
                 payment_number = len(sessions)
@@ -532,6 +537,7 @@ class TestLiveRunnerSession:
         assert sessions[0]["challenge"] == _payment_challenge("fixed-manifest")
         assert sessions[1]["challenge"] == _payment_challenge("fixed-manifest")
         assert result.payment_session is None
+        assert result.auth_ids == ("auth-1", "auth-2")
 
     async def test_paid_call_restarts_challenge_when_signer_requests_refresh(
         self,
@@ -546,6 +552,8 @@ class TestLiveRunnerSession:
         runner_url = "https://service.example.com/apps/runner-1/session"
 
         class _PaymentSession:
+            auth_id = ""
+
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 payment_sessions.append(self)
                 sessions.append({"signer_url": signer_url, **kwargs})
@@ -645,6 +653,8 @@ class TestLiveRunnerSession:
         runner_url = "https://service.example.com/apps/runner-1/session"
 
         class _PaymentSession:
+            auth_id = ""
+
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 del signer_url, kwargs
 
@@ -1874,6 +1884,7 @@ class _FakePaymentSession:
     def __init__(self, signer_url: str, **kwargs: object) -> None:
         self.signer_url = signer_url
         self.kwargs = kwargs
+        self.auth_id = f"auth-{len(type(self).instances) + 1}"
         type(self).instances.append(self)
 
     async def get_payment(self) -> object:
@@ -1961,6 +1972,7 @@ class TestCallRunnerStreamSessionId:
             with _fake_signer():
                 async with await _paid_call(base, stream=True) as stream:
                     assert stream.session_id == "manifest-1"
+                    assert stream.auth_ids == ("auth-1",)
                     assert stream.payment_session is _FakePaymentSession.instances[0]
                     lines = [line async for line in stream.aiter_lines() if line]
 
@@ -1976,7 +1988,7 @@ class TestCallRunnerStreamSessionId:
 
 class TestCallRunnerPaymentSent:
     @pytest.mark.parametrize("status", [500, 400])
-    async def test_error_after_payment_carries_the_manifest(self, status: int) -> None:
+    async def test_error_after_payment_carries_the_auth_id(self, status: int) -> None:
         seen: list[_RecordedRequest] = []
         async with _serve(_runner_app(seen, statuses=[402, status])) as base:
             with _fake_signer():
@@ -1984,11 +1996,11 @@ class TestCallRunnerPaymentSent:
                     await _paid_call(base)
         assert info.value.status_code == status
         assert info.value.payment_sent is True
-        assert info.value.manifest_id == "manifest-1"
+        assert info.value.auth_ids == ("auth-1",)
         assert len(seen) == 2
 
     @pytest.mark.parametrize("status", [400, 503])
-    async def test_error_before_payment_has_no_manifest(self, status: int) -> None:
+    async def test_error_before_payment_has_no_auth_id(self, status: int) -> None:
         seen: list[_RecordedRequest] = []
         async with _serve(_runner_app(seen, statuses=[status])) as base:
             with _fake_signer():
@@ -1996,7 +2008,7 @@ class TestCallRunnerPaymentSent:
                     await _paid_call(base)
         assert info.value.status_code == status
         assert info.value.payment_sent is False
-        assert info.value.manifest_id == ""
+        assert info.value.auth_ids == ()
         assert len(seen) == 1
 
     async def test_connection_refused_before_challenge(self) -> None:
@@ -2012,7 +2024,7 @@ class TestCallRunnerPaymentSent:
                     await _paid_call(base, stream=True)
         assert info.value.status_code == 500
         assert info.value.payment_sent is True
-        assert info.value.manifest_id == "manifest-1"
+        assert info.value.auth_ids == ("auth-1",)
 
     async def test_exhausted_retries_after_payment_says_so(self) -> None:
         seen: list[_RecordedRequest] = []
@@ -2021,7 +2033,7 @@ class TestCallRunnerPaymentSent:
                 with pytest.raises(LivepeerGatewayError, match="exhausted") as info:
                     await _paid_call(base, max_payment_challenge_retries=1)
         assert info.value.payment_sent is True
-        assert info.value.manifest_id == "manifest-1"
+        assert info.value.auth_ids == ("auth-1", "auth-2", "auth-3")
 
     async def test_paid_call_without_signer_is_unpaid(self) -> None:
         seen: list[_RecordedRequest] = []
@@ -2029,4 +2041,4 @@ class TestCallRunnerPaymentSent:
             with pytest.raises(LivepeerGatewayError, match="requires signer_url") as info:
                 await call_runner(f"{base}/call", payload={"prompt": "hi"})
         assert info.value.payment_sent is False
-        assert info.value.manifest_id == ""
+        assert info.value.auth_ids == ()
