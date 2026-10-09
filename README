@@ -176,14 +176,17 @@ Selection/discovery precedence (highest -> lowest):
 
 ## TLS certificate verification
 
-Orchestrators serve self-signed certificates, so by default the SDK does not
-verify HTTPS certificates (the gRPC client does not either). When every HTTPS
-endpoint the SDK reaches (signer, discovery, orchestrators, runners, trickle)
-presents a publicly trusted certificate, turn verification on for the process:
+By default the SDK verifies HTTPS certificates against the system trust store.
+Orchestrators serve self-signed certificates, so to reach a stock orchestrator
+(and the signer, discovery, runner and trickle endpoints behind it) turn
+verification off for the process:
 
 ```bash
-export LIVEPEER_GATEWAY_VERIFY_TLS=1   # "1", "true" or "yes"
+export LIVEPEER_GATEWAY_VERIFY_TLS=0   # "0", "false", "no" or "off"
 ```
 
-or at runtime with `livepeer_gateway.http.VERIFY_TLS = True`. Verification then
-uses the system trust store.
+or at runtime with `livepeer_gateway.http.VERIFY_TLS = False`.
+
+The setting is process-wide and all-or-nothing: there is no per-endpoint or
+per-call override, so leave it on only when every HTTPS endpoint the SDK reaches
+presents a publicly trusted certificate.

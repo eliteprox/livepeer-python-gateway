@@ -24,24 +24,33 @@ VERIFY_TLS_ENV = "LIVEPEER_GATEWAY_VERIFY_TLS"
 
 
 def _verify_tls_from_env() -> bool:
-    """``LIVEPEER_GATEWAY_VERIFY_TLS``: ``1``, ``true`` or ``yes`` turn verification on."""
-    return os.environ.get(VERIFY_TLS_ENV, "").strip().lower() in {"1", "true", "yes"}
+    """``LIVEPEER_GATEWAY_VERIFY_TLS``: ``0``, ``false``, ``no`` or ``off`` turn verification off."""
+    return os.environ.get(VERIFY_TLS_ENV, "").strip().lower() not in {"0", "false", "no", "off"}
 
 
-# Orchestrators serve self-signed certificates, so HTTPS certificates are not
-# verified by default, as with the gRPC client. Set LIVEPEER_GATEWAY_VERIFY_TLS=1,
-# or assign VERIFY_TLS, when every HTTPS endpoint the SDK calls (signer,
-# discovery, orchestrators, runners, trickle) has a publicly trusted certificate.
+# HTTPS certificates are verified against the system trust store by default. Set
+# LIVEPEER_GATEWAY_VERIFY_TLS=0, or assign VERIFY_TLS, to turn verification off
+# for the process when any HTTPS endpoint the SDK calls (signer, discovery,
+# orchestrators, runners, trickle) serves a self-signed certificate, as stock
+# orchestrators do.
 VERIFY_TLS: bool = _verify_tls_from_env()
 
 
 @functools.cache
 def _ssl_context_for(verify: bool) -> ssl.SSLContext:
-    return ssl.create_default_context() if verify else ssl._create_unverified_context()
+    ctx = ssl.create_default_context()
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 def _ssl_context() -> ssl.SSLContext:
-    """TLS context for an outgoing HTTPS request, following ``VERIFY_TLS`` at call time."""
+    """TLS context for an outgoing HTTPS request, following ``VERIFY_TLS`` at call time.
+
+    ``VERIFY_TLS`` is process-wide and all-or-nothing: it governs every HTTPS
+    request the SDK makes, with no per-endpoint or per-call override.
+    """
     return _ssl_context_for(VERIFY_TLS)
 
 

@@ -1,9 +1,9 @@
-"""Opt-in TLS certificate verification.
+"""Opt-out TLS certificate verification.
 
 The tests serve a real aiohttp application over a self-signed certificate
-generated for the test. By default the SDK accepts it, as it accepts the
-self-signed certificates orchestrators serve; with ``VERIFY_TLS`` on, every
-HTTP path refuses it before sending a request.
+generated for the test. By default the SDK verifies certificates, so every HTTP
+path refuses it before sending a request; with ``VERIFY_TLS`` off, the SDK
+accepts it, as it accepts the self-signed certificates orchestrators serve.
 """
 
 from __future__ import annotations
@@ -58,20 +58,20 @@ def _write_self_signed(directory: pathlib.Path) -> tuple[pathlib.Path, pathlib.P
 
 
 class TestVerifyTlsSetting:
-    @pytest.mark.parametrize("value", ["1", "true", "yes", " TRUE ", "Yes"])
-    def test_env_turns_verification_on(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    @pytest.mark.parametrize("value", ["0", "false", "no", "off", " FALSE ", "Off"])
+    def test_env_turns_verification_off(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
         monkeypatch.setenv(http.VERIFY_TLS_ENV, value)
-        assert http._verify_tls_from_env() is True
+        assert http._verify_tls_from_env() is False
 
-    @pytest.mark.parametrize("value", [None, "", "0", "false", "no", "off"])
-    def test_anything_else_leaves_it_off(
+    @pytest.mark.parametrize("value", [None, "", "1", "true", "yes", "anything"])
+    def test_anything_else_leaves_it_on(
         self, monkeypatch: pytest.MonkeyPatch, value: str | None
     ) -> None:
         if value is None:
             monkeypatch.delenv(http.VERIFY_TLS_ENV, raising=False)
         else:
             monkeypatch.setenv(http.VERIFY_TLS_ENV, value)
-        assert http._verify_tls_from_env() is False
+        assert http._verify_tls_from_env() is True
 
     def test_context_follows_the_setting_at_call_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(http, "VERIFY_TLS", False)
@@ -149,7 +149,7 @@ def _app(calls: list[str]) -> web.Application:
     return app
 
 
-class TestDefaultAcceptsSelfSigned:
+class TestVerifyOffAcceptsSelfSigned:
     async def test_runner_signer_and_discovery(self, verify_off: None) -> None:
         calls: list[str] = []
         async with _serve_tls(_app(calls)) as base:
@@ -165,7 +165,7 @@ class TestDefaultAcceptsSelfSigned:
         assert calls == ["/call", "/sse", "/sign-orchestrator-info", "/discover-orchestrators"]
 
 
-class TestOptInRejectsSelfSigned:
+class TestDefaultRejectsSelfSigned:
     async def test_call_runner(self, verify_on: None) -> None:
         calls: list[str] = []
         async with _serve_tls(_app(calls)) as base:
