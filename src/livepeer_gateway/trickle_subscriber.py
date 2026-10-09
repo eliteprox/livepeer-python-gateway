@@ -8,6 +8,7 @@ from typing import Optional
 
 import aiohttp
 
+from .http import _ssl_context
 from .segment_reader import SegmentReader
 
 
@@ -104,7 +105,7 @@ class TrickleSubscriber:
         if self._lock is None:
             self._lock = asyncio.Lock()
         if self._session is None:
-            connector = aiohttp.TCPConnector(ssl=False)
+            connector = aiohttp.TCPConnector(ssl=_ssl_context())
             self._session = aiohttp.ClientSession(connector=connector)
 
     def _segment_url(self, seq: int) -> str:

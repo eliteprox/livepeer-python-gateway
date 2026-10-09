@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import functools
 import json
+import os
 import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -17,6 +19,39 @@ from .errors import (
 )
 
 _REFRESH_SESSION_ORCHESTRATOR_URL_HEADER = "Livepeer-Orchestrator-URL"
+
+VERIFY_TLS_ENV = "LIVEPEER_GATEWAY_VERIFY_TLS"
+
+
+def _verify_tls_from_env() -> bool:
+    """``LIVEPEER_GATEWAY_VERIFY_TLS``: ``0``, ``false``, ``no`` or ``off`` turn verification off."""
+    return os.environ.get(VERIFY_TLS_ENV, "").strip().lower() not in {"0", "false", "no", "off"}
+
+
+# HTTPS certificates are verified against the system trust store by default. Set
+# LIVEPEER_GATEWAY_VERIFY_TLS=0, or assign VERIFY_TLS, to turn verification off
+# for the process when any HTTPS endpoint the SDK calls (signer, discovery,
+# orchestrators, runners, trickle) serves a self-signed certificate, as stock
+# orchestrators do.
+VERIFY_TLS: bool = _verify_tls_from_env()
+
+
+@functools.cache
+def _ssl_context_for(verify: bool) -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """TLS context for an outgoing HTTPS request, following ``VERIFY_TLS`` at call time.
+
+    ``VERIFY_TLS`` is process-wide and all-or-nothing: it governs every HTTPS
+    request the SDK makes, with no per-endpoint or per-call override.
+    """
+    return _ssl_context_for(VERIFY_TLS)
 
 
 def _truncate(s: str, max_len: int = 2000) -> str:
@@ -160,9 +195,7 @@ def request_json_sync(
         headers=headers,
     )
     req = Request(url, data=body, headers=req_headers, method=resolved_method)
-
-    # Always ignore HTTPS certificate validation (matches our gRPC behavior).
-    ssl_ctx = ssl._create_unverified_context()
+    ssl_ctx = _ssl_context()
 
     try:
         with urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
@@ -266,7 +299,7 @@ async def _request_body(
 
     try:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
-        connector = aiohttp.TCPConnector(ssl=False)
+        connector = aiohttp.TCPConnector(ssl=_ssl_context())
         async with aiohttp.ClientSession(timeout=client_timeout, connector=connector) as session:
             async with session.request(resolved_method, url, data=body, headers=req_headers) as resp:
                 raw = await resp.read()
@@ -356,7 +389,7 @@ async def open_stream(
     )
 
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=connect_timeout, sock_read=None)
-    session = aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False))
+    session = aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=_ssl_context()))
     try:
         resp = await session.request(resolved_method, url, data=body, headers=req_headers)
     except (TimeoutError, aiohttp.ClientError) as e:

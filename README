@@ -173,3 +173,20 @@ Selection/discovery precedence (highest -> lowest):
 5) signer-derived discovery endpoint
 
 `signer_headers` are sent with requests to the signer service. `discovery_headers` are only used when an explicit `discovery_url` is provided (and not when using the signer service as a discovery fallback).
+
+## TLS certificate verification
+
+By default the SDK verifies HTTPS certificates against the system trust store.
+Orchestrators serve self-signed certificates, so to reach a stock orchestrator
+(and the signer, discovery, runner and trickle endpoints behind it) turn
+verification off for the process:
+
+```bash
+export LIVEPEER_GATEWAY_VERIFY_TLS=0   # "0", "false", "no" or "off"
+```
+
+or at runtime with `livepeer_gateway.http.VERIFY_TLS = False`.
+
+The setting is process-wide and all-or-nothing: there is no per-endpoint or
+per-call override, so leave it on only when every HTTPS endpoint the SDK reaches
+presents a publicly trusted certificate.

@@ -5,7 +5,6 @@ import base64
 import json
 import logging
 import re
-import ssl
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Optional
@@ -488,7 +487,7 @@ class PaymentSession:
         Generate a payment (via get_payment) and forward it
         to the orchestrator via POST {orch}/payment.
         """
-        from .http import _extract_error_message, _http_origin
+        from .http import _extract_error_message, _http_origin, _ssl_context
 
         p = self.get_payment()
         if not self._info.transcoder:
@@ -500,7 +499,7 @@ class PaymentSession:
             "Livepeer-Segment": p.seg_creds or "",
         }
         req = Request(url, data=b"", headers=headers, method="POST")
-        ssl_ctx = ssl._create_unverified_context()
+        ssl_ctx = _ssl_context()
         try:
             with urlopen(req, timeout=5.0, context=ssl_ctx) as resp:
                 resp.read()
