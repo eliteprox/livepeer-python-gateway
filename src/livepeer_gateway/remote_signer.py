@@ -255,12 +255,11 @@ class LivePaymentSession:
         self._max_price = dict(max_price) if max_price is not None else None
         self._max_refresh_retries = max(0, int(max_refresh_retries))
         self._state: dict[str, Any] | None = None
-        self._auth_id = ""
 
     @property
     def auth_id(self) -> str:
         """The signer's sealed auth id, empty until the first payment response."""
-        return self._auth_id
+        return auth_id_from_signer_state(self._state)
 
     async def get_payment(self) -> GetPaymentResponse:
         if not self._signer_url:
@@ -363,7 +362,6 @@ class LivePaymentSession:
             )
 
         self._state = state
-        self._auth_id = auth_id_from_signer_state(state)
         return GetPaymentResponse(payment=payment, seg_creds=seg_creds)
 
     async def _refresh_payment_params(self) -> None:
