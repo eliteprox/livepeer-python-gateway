@@ -365,9 +365,11 @@ async def open_stream(
             f"HTTP stream error: failed to reach endpoint: {getattr(e, 'message', e)} (url={url})"
         ) from e
     if resp.status >= 400:
-        raw = await resp.text()
-        resp.release()
-        await session.close()
+        try:
+            raw = await resp.text()
+        finally:
+            resp.release()
+            await session.close()
         _raise_http_json_error(resp.status, url, raw, dict(resp.headers.items()))
     return session, resp
 

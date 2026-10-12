@@ -17,6 +17,7 @@ from livepeer_gateway import live_runner
 from livepeer_gateway.errors import (
     LivepeerGatewayError,
     LivepeerHTTPError,
+    PaymentError,
     SignerRefreshRequired,
 )
 from livepeer_gateway.live_runner import (
@@ -26,6 +27,7 @@ from livepeer_gateway.live_runner import (
     LiveRunnerPriceInfo,
     LiveRunnerRegistration,
     LiveRunnerSessionEvent,
+    RunnerCallRecord,
     register_runner,
     stop_runner_session,
     create_proxy,
@@ -1880,6 +1882,8 @@ class _FakePaymentSession:
     """Stands in for LivePaymentSession: returns fixed tickets, funds forever."""
 
     instances: list[_FakePaymentSession] = []
+    # What each session's get_payment raises, in order; None signs normally.
+    errors: list[Exception | None] = []
 
     def __init__(self, signer_url: str, **kwargs: object) -> None:
         self.signer_url = signer_url
@@ -1888,6 +1892,9 @@ class _FakePaymentSession:
         type(self).instances.append(self)
 
     async def get_payment(self) -> object:
+        error = type(self).errors.pop(0) if type(self).errors else None
+        if error is not None:
+            raise error
         return SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
 
     async def run_payments(self) -> bool:
@@ -1896,8 +1903,9 @@ class _FakePaymentSession:
 
 
 @contextlib.contextmanager
-def _fake_signer() -> Iterator[None]:
+def _fake_signer(errors: list[Exception | None] | None = None) -> Iterator[None]:
     _FakePaymentSession.instances = []
+    _FakePaymentSession.errors = list(errors or [])
     with (
         mock.patch.object(live_runner, "LivePaymentSession", _FakePaymentSession),
         mock.patch.object(
@@ -1913,13 +1921,14 @@ def _fake_signer() -> Iterator[None]:
 def _runner_app(
     seen: list[_RecordedRequest],
     *,
-    statuses: list[int] | None = None,
+    statuses: list[int | str] | None = None,
     stream: bool = False,
 ) -> web.Application:
     """A runner that answers each request with the next status in ``statuses``.
 
     402 carries a payment challenge; 200 answers JSON, or two SSE frames when
-    ``stream`` is set.
+    ``stream`` is set. ``"hang"`` never answers in time, and ``"truncated"``
+    starts a 500 and drops the connection mid-body.
     """
     pending = list(statuses or [200])
 
@@ -1927,6 +1936,17 @@ def _runner_app(
         body = await request.read()
         seen.append(_RecordedRequest(request, body))
         status = pending.pop(0) if len(pending) > 1 else pending[0]
+        if status == "hang":
+            await asyncio.sleep(1)
+            return web.Response(status=500)
+        if status == "truncated":
+            resp = web.StreamResponse(status=500)
+            resp.content_length = 1000
+            await resp.prepare(request)
+            await resp.write(b"partial")
+            assert request.transport is not None
+            request.transport.close()
+            return resp
         if status == 402:
             return web.Response(
                 status=402,
@@ -1934,7 +1954,7 @@ def _runner_app(
                 content_type="application/json",
             )
         if status != 200:
-            return web.Response(status=status, text="no")
+            return web.Response(status=int(status), text="no")
         if stream:
             resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
             await resp.prepare(request)
@@ -2042,3 +2062,113 @@ class TestCallRunnerPaymentSent:
                 await call_runner(f"{base}/call", payload={"prompt": "hi"})
         assert info.value.payment_sent is False
         assert info.value.auth_ids == ()
+
+
+class TestCallRunnerRecord:
+    async def test_attempts_record_the_challenge_and_success(self) -> None:
+        seen: list[_RecordedRequest] = []
+        record = RunnerCallRecord()
+        async with _serve(_runner_app(seen, statuses=[402, 200])) as base:
+            with _fake_signer():
+                result = await _paid_call(base, record=record)
+        assert result.record is record
+        assert result.payment_sent is True
+        assert record.runner_url == f"{base}/call"
+        assert [a.outcome for a in record.attempts] == ["payment_required", "succeeded"]
+        assert [a.status_code for a in record.attempts] == [402, None]
+        assert [a.payment_sent for a in record.attempts] == [False, True]
+        assert [a.manifest_id for a in record.attempts] == ["", "manifest-1"]
+        assert [a.auth_id for a in record.attempts] == ["", "auth-1"]
+
+    async def test_signer_failure_after_a_paid_attempt_still_says_paid(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402])) as base:
+            with _fake_signer([None, PaymentError("signer down")]):
+                with pytest.raises(PaymentError) as info:
+                    await _paid_call(base)
+        record = info.value.record
+        assert record is not None
+        assert [a.outcome for a in record.attempts] == ["payment_required", "payment_required", "payment"]
+        assert info.value.payment_sent is True
+        assert info.value.auth_ids == ("auth-1", "auth-2")
+
+    async def test_unpaid_retry_after_refresh_still_says_paid(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402, 402, 500])) as base:
+            with _fake_signer([None, SignerRefreshRequired("refresh")]):
+                with pytest.raises(LivepeerHTTPError) as info:
+                    await _paid_call(base)
+        assert info.value.status_code == 500
+        assert info.value.payment_sent is True
+        assert info.value.auth_ids == ("auth-1", "auth-2")
+        assert info.value.record is not None
+        assert info.value.record.attempts[-1].payment_sent is False
+        assert info.value.record.outcome == "http"
+
+    async def test_refresh_on_the_last_attempt_keeps_earlier_auth_ids(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402])) as base:
+            with _fake_signer([None, None, SignerRefreshRequired("refresh")]):
+                with pytest.raises(SignerRefreshRequired) as info:
+                    await _paid_call(base, max_payment_challenge_retries=1)
+        assert info.value.payment_sent is True
+        assert info.value.auth_ids == ("auth-1", "auth-2", "auth-3")
+        assert info.value.record is not None
+        assert info.value.record.outcome == "payment"
+
+    async def test_truncated_stream_error_after_payment_is_wrapped(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[402, "truncated"], stream=True)) as base:
+            with _fake_signer():
+                with pytest.raises(LivepeerGatewayError, match="Live runner call failed") as info:
+                    await _paid_call(base, stream=True)
+        assert not isinstance(info.value, LivepeerHTTPError)
+        assert info.value.payment_sent is True
+        assert info.value.auth_ids == ("auth-1",)
+        assert info.value.record is not None
+        assert info.value.record.outcome == "disconnected"
+
+    async def test_cancelled_call_leaves_the_record_readable(self) -> None:
+        seen: list[_RecordedRequest] = []
+        record = RunnerCallRecord()
+        async with _serve(_runner_app(seen, statuses=[402, "hang"])) as base:
+            with _fake_signer():
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(_paid_call(base, record=record), 0.5)
+        assert record.payment_sent is True
+        assert record.auth_ids == ("auth-1",)
+        assert record.outcome == "cancelled"
+
+    async def test_refused_connection_is_unreachable(self) -> None:
+        with pytest.raises(LivepeerGatewayError) as info:
+            await call_runner(f"http://127.0.0.1:{_free_port()}/call", payload={})
+        assert info.value.record is not None
+        assert info.value.record.outcome == "unreachable"
+        assert info.value.payment_sent is False
+
+    async def test_slow_runner_is_a_timeout_not_unreachable(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=["hang"])) as base:
+            with pytest.raises(LivepeerGatewayError) as info:
+                await call_runner(f"{base}/call", payload={}, timeout=0.2)
+        assert len(seen) == 1
+        assert info.value.record is not None
+        assert info.value.record.outcome == "timeout"
+
+    @pytest.mark.parametrize(("status", "outcome"), [(503, "refused"), (400, "http")])
+    async def test_runner_error_status_outcomes(self, status: int, outcome: str) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, statuses=[status])) as base:
+            with pytest.raises(LivepeerHTTPError) as info:
+                await call_runner(f"{base}/call", payload={})
+        assert info.value.record is not None
+        assert info.value.record.outcome == outcome
+        assert info.value.record.attempts[0].status_code == status
+
+    async def test_stream_records_its_status(self) -> None:
+        seen: list[_RecordedRequest] = []
+        async with _serve(_runner_app(seen, stream=True)) as base:
+            async with await call_runner(f"{base}/call", payload={}, stream=True) as stream:
+                assert stream.record.outcome == "succeeded"
+                assert stream.record.attempts[0].status_code == 200
+                assert stream.payment_sent is False

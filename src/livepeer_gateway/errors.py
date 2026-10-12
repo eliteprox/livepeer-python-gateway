@@ -1,32 +1,39 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING
 
-import aiohttp
+if TYPE_CHECKING:
+    from .live_runner import RunnerCallRecord
 
 
 class LivepeerGatewayError(RuntimeError):
     """Base error for the library.
 
-    ``payment_sent`` is True when the error comes from a ``call_runner`` attempt
-    whose request carried ``Livepeer-Payment`` headers, that is, after a payment
-    challenge had already been answered. A gateway may retry another runner only
-    while it is False; once tickets are sent the request is bound to that runner.
-
-    ``auth_ids`` are the signer auth ids of every payment session this call
-    opened. The signer charges an allocation when it signs, which can be before
-    ``payment_sent`` becomes True. Empty when no session was signed.
+    ``record`` is set on every error ``call_runner`` raises: the attempts it
+    made against the runner, with what was signed, sent, and how each ended.
+    ``payment_sent`` and ``auth_ids`` read from it, and are empty without one.
     """
 
-    payment_sent: bool = False
-    auth_ids: tuple[str, ...] = ()
+    record: RunnerCallRecord | None = None
 
+    @property
+    def payment_sent(self) -> bool:
+        """True once any attempt's request carried ``Livepeer-Payment`` headers.
 
-def unique_auth_ids(auth_ids: Iterable[str]) -> tuple[str, ...]:
-    """Non-empty auth ids, first occurrence order, without repeats."""
-    return tuple(dict.fromkeys(auth_id for auth_id in auth_ids if auth_id))
+        The call is then bound to this runner; another runner is safe only
+        while this is False.
+        """
+        return self.record is not None and self.record.payment_sent
+
+    @property
+    def auth_ids(self) -> tuple[str, ...]:
+        """Signer auth ids of every payment session the call opened.
+
+        The signer charges when it signs, so these can be set while
+        ``payment_sent`` is still False.
+        """
+        return self.record.auth_ids if self.record is not None else ()
 
 
 class LivepeerHTTPError(LivepeerGatewayError):
@@ -46,52 +53,11 @@ class OrchestratorRejection:
     reason: str
 
 
-RunnerFailureKind = Literal["capacity", "unreachable", "other"]
-
-
 @dataclass
 class RunnerRejection:
-    """Records a single runner that was tried and rejected.
-
-    ``kind`` is ``capacity`` for an HTTP 503, ``unreachable`` when the runner
-    never answered, and ``other`` for every remaining failure. ``payment_sent``
-    is copied from the ``call_runner`` error: True only after that attempt's
-    request carried ``Livepeer-Payment`` headers. ``auth_ids`` are the signer
-    auth ids that attempt opened, which can be set before ``payment_sent``.
-    """
-
+    """Records a single runner that was tried and rejected."""
     url: str
     reason: str
-    kind: RunnerFailureKind = "other"
-    payment_sent: bool = False
-    auth_ids: tuple[str, ...] = ()
-
-
-def runner_rejection(url: str, error: BaseException) -> RunnerRejection:
-    """Record one failed runner attempt without dropping payment or its kind."""
-    payment_sent = False
-    auth_ids: tuple[str, ...] = ()
-    if isinstance(error, LivepeerGatewayError):
-        payment_sent = error.payment_sent
-        auth_ids = error.auth_ids
-    return RunnerRejection(
-        url=url,
-        reason=str(error),
-        kind=_runner_failure_kind(error),
-        payment_sent=payment_sent,
-        auth_ids=auth_ids,
-    )
-
-
-def _runner_failure_kind(error: BaseException) -> RunnerFailureKind:
-    if isinstance(error, LivepeerHTTPError) and error.status_code == 503:
-        return "capacity"
-    current: BaseException | None = error
-    while current is not None:
-        if isinstance(current, (OSError, aiohttp.ClientConnectionError)):
-            return "unreachable"
-        current = current.__cause__
-    return "other"
 
 
 class NoOrchestratorAvailableError(LivepeerGatewayError):
@@ -115,11 +81,6 @@ class NoRunnerAvailableError(LivepeerGatewayError):
     def __init__(self, message: str, rejections: list[RunnerRejection] | None = None) -> None:
         super().__init__(message)
         self.rejections: list[RunnerRejection] = rejections or []
-        paid = [rejection for rejection in self.rejections if rejection.payment_sent]
-        self.payment_sent = bool(paid)
-        self.auth_ids = unique_auth_ids(
-            auth_id for rejection in self.rejections for auth_id in rejection.auth_ids
-        )
 
     def __str__(self) -> str:
         message = super().__str__()
