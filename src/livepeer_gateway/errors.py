@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -21,6 +22,11 @@ class LivepeerGatewayError(RuntimeError):
 
     payment_sent: bool = False
     auth_ids: tuple[str, ...] = ()
+
+
+def unique_auth_ids(auth_ids: Iterable[str]) -> tuple[str, ...]:
+    """Non-empty auth ids, first occurrence order, without repeats."""
+    return tuple(dict.fromkeys(auth_id for auth_id in auth_ids if auth_id))
 
 
 class LivepeerHTTPError(LivepeerGatewayError):
@@ -82,7 +88,7 @@ def _runner_failure_kind(error: BaseException) -> RunnerFailureKind:
         return "capacity"
     current: BaseException | None = error
     while current is not None:
-        if isinstance(current, (TimeoutError, ConnectionError, OSError, aiohttp.ClientConnectionError)):
+        if isinstance(current, (OSError, aiohttp.ClientConnectionError)):
             return "unreachable"
         current = current.__cause__
     return "other"
@@ -111,12 +117,9 @@ class NoRunnerAvailableError(LivepeerGatewayError):
         self.rejections: list[RunnerRejection] = rejections or []
         paid = [rejection for rejection in self.rejections if rejection.payment_sent]
         self.payment_sent = bool(paid)
-        auth_ids: list[str] = []
-        for rejection in self.rejections:
-            for auth_id in rejection.auth_ids:
-                if auth_id not in auth_ids:
-                    auth_ids.append(auth_id)
-        self.auth_ids = tuple(auth_ids)
+        self.auth_ids = unique_auth_ids(
+            auth_id for rejection in self.rejections for auth_id in rejection.auth_ids
+        )
 
     def __str__(self) -> str:
         message = super().__str__()
