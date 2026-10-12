@@ -6,7 +6,6 @@ import json
 import logging
 import re
 import ssl
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any, Optional
@@ -26,28 +25,6 @@ _LOG = logging.getLogger(__name__)
 
 # Must stay under the signer's opening payment: 10s per-second, 60s pixel.
 PAYMENT_INTERVAL_S = 3.0
-
-
-def auth_id_from_signer_state(state: Mapping[str, Any] | None) -> str:
-    """Read the auth id sealed in a remote-signer payment state.
-
-    go-livepeer returns that state as base64-encoded JSON under ``State``.
-    ``AuthID`` is the id its authorization webhook assigned. An unreadable
-    state, or one with no auth id yet, reads as empty.
-    """
-    if not state:
-        return ""
-    raw = state.get("State")
-    if not isinstance(raw, str) or not raw:
-        return ""
-    try:
-        payload = json.loads(base64.standard_b64decode(raw))
-    except (ValueError, UnicodeDecodeError):
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    auth_id = payload.get("AuthID")
-    return auth_id if isinstance(auth_id, str) else ""
 
 @dataclass(frozen=True)
 class GetPaymentResponse:
@@ -258,8 +235,19 @@ class LivePaymentSession:
 
     @property
     def auth_id(self) -> str:
-        """The signer's sealed auth id, empty until the first payment response."""
-        return auth_id_from_signer_state(self._state)
+        """The id the signer accounts this session under.
+
+        go-livepeer takes it from its authorization webhook, or a ``Signer-Auth-Id``
+        header, and keeps it in the signed state. Empty before the first payment,
+        or when the signer assigned none.
+        """
+        state = self._state or {}
+        try:
+            signed = json.loads(base64.standard_b64decode(state.get("State") or ""))
+        except (TypeError, ValueError):
+            return ""
+        auth_id = signed.get("AuthID") if isinstance(signed, dict) else None
+        return auth_id if isinstance(auth_id, str) else ""
 
     async def get_payment(self) -> GetPaymentResponse:
         if not self._signer_url:

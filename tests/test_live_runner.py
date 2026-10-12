@@ -4,14 +4,12 @@ import asyncio
 import contextlib
 import json
 import os
-import socket
 import sys
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from aiohttp import web
 
 from livepeer_gateway import live_runner
 from livepeer_gateway.errors import (
@@ -22,12 +20,13 @@ from livepeer_gateway.errors import (
 )
 from livepeer_gateway.live_runner import (
     call_runner,
+    LivePaymentSessionCallback,
+    LiveRunnerCallResult,
     LiveRunnerGPU,
     LiveRunnerInstance,
     LiveRunnerPriceInfo,
     LiveRunnerRegistration,
     LiveRunnerSessionEvent,
-    RunnerCallRecord,
     register_runner,
     stop_runner_session,
     create_proxy,
@@ -303,8 +302,6 @@ class TestLiveRunnerSession:
                 payment_sessions.append(self)
                 sessions.append({"signer_url": signer_url, **kwargs})
 
-            auth_id = ""
-
             async def get_payment(self) -> object:
                 return SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
 
@@ -400,8 +397,6 @@ class TestLiveRunnerSession:
         )
 
         class _PaymentSession:
-            auth_id = ""
-
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 sessions.append({"signer_url": signer_url, **kwargs})
 
@@ -475,7 +470,6 @@ class TestLiveRunnerSession:
         class _PaymentSession:
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 sessions.append({"signer_url": signer_url, **kwargs})
-                self.auth_id = f"auth-{len(sessions)}"
 
             async def get_payment(self) -> object:
                 payment_number = len(sessions)
@@ -539,7 +533,6 @@ class TestLiveRunnerSession:
         assert sessions[0]["challenge"] == _payment_challenge("fixed-manifest")
         assert sessions[1]["challenge"] == _payment_challenge("fixed-manifest")
         assert result.payment_session is None
-        assert result.auth_ids == ("auth-1", "auth-2")
 
     async def test_paid_call_restarts_challenge_when_signer_requests_refresh(
         self,
@@ -554,8 +547,6 @@ class TestLiveRunnerSession:
         runner_url = "https://service.example.com/apps/runner-1/session"
 
         class _PaymentSession:
-            auth_id = ""
-
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 payment_sessions.append(self)
                 sessions.append({"signer_url": signer_url, **kwargs})
@@ -655,8 +646,6 @@ class TestLiveRunnerSession:
         runner_url = "https://service.example.com/apps/runner-1/session"
 
         class _PaymentSession:
-            auth_id = ""
-
             def __init__(self, signer_url: str, **kwargs: object) -> None:
                 del signer_url, kwargs
 
@@ -739,6 +728,183 @@ def _payment_url(manifest_id: str) -> str:
 
 def _json_data(data: dict[str, object]) -> tuple[bytes, str]:
     return json.dumps(data).encode("utf-8"), "application/json"
+
+
+_RUNNER_URL = "https://service.example.com/apps/runner-1/session"
+
+
+@contextlib.contextmanager
+def _paid_runner(
+    replies: list[object],
+    signs: list[object] | None = None,
+) -> Iterator[tuple[list[dict[str, str]], list[object]]]:
+    """Fake the runner and signer behind ``call_runner``.
+
+    The runner answers each request with the next of ``replies``: 402 is a
+    payment challenge, "hang" never answers, an exception is raised, and a dict
+    is returned as JSON. Each payment session signs with the next of ``signs``,
+    raising it if it is an exception; by default every session signs. Yields
+    each request's headers and every session created.
+    """
+    requests: list[dict[str, str]] = []
+    sessions: list[object] = []
+    pending_signs = list(signs or [])
+
+    class _PaymentSession:
+        def __init__(self, signer_url: str, **kwargs: object) -> None:
+            del signer_url, kwargs
+            sessions.append(self)
+
+        async def get_payment(self) -> object:
+            sign = pending_signs.pop(0) if pending_signs else None
+            if isinstance(sign, Exception):
+                raise sign
+            return sign or SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
+
+        async def run_payments(self) -> bool:
+            await asyncio.Event().wait()
+            return False
+
+    async def _request_body(
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **kwargs: object,
+    ) -> tuple[bytes, str]:
+        del kwargs
+        requests.append(dict(headers or {}))
+        reply = replies.pop(0)
+        if reply == 402:
+            raise LivepeerHTTPError(
+                402, url, _payment_challenge_body("manifest-1"), "payment required"
+            )
+        if reply == "hang":
+            await asyncio.Event().wait()
+        if isinstance(reply, Exception):
+            raise reply
+        assert isinstance(reply, dict)
+        return _json_data(reply)
+
+    with (
+        mock.patch.object(live_runner, "_request_body", _request_body),
+        mock.patch.object(live_runner, "LivePaymentSession", _PaymentSession),
+        mock.patch.object(
+            live_runner,
+            "get_signer_info",
+            new_callable=mock.AsyncMock,
+            return_value=SimpleNamespace(address="opaque-payer", sig="opaque-signature"),
+        ),
+    ):
+        yield requests, sessions
+
+
+async def _paid_call(
+    on_payment_session: LivePaymentSessionCallback,
+    *,
+    payment_unit: str = "fixed",
+) -> LiveRunnerCallResult:
+    return await call_runner(
+        _RUNNER_URL,
+        signer_url="https://signer.example.com",
+        payment_unit=payment_unit,
+        on_payment_session=on_payment_session,
+    )
+
+
+class TestCallRunnerPaymentSessions:
+    @pytest.mark.parametrize("is_async", [False, True])
+    async def test_reports_the_signed_session_before_the_paid_request(
+        self,
+        is_async: bool,
+    ) -> None:
+        reported: list[tuple[object, int]] = []
+        with _paid_runner([402, {"ok": True}]) as (requests, _):
+
+            def _report(session: object) -> None:
+                reported.append((session, len(requests)))
+
+            async def _report_async(session: object) -> None:
+                await asyncio.sleep(0)
+                _report(session)
+
+            result = await _paid_call(
+                _report_async if is_async else _report,
+                payment_unit="seconds",
+            )
+
+        # Reported after the unpaid request, before the paid one.
+        assert reported == [(result.payment_session, 1)]
+        assert requests[1]["Livepeer-Payment"] == "payment-b64"
+
+    async def test_reports_every_session_of_a_fixed_price_call(self) -> None:
+        reported: list[object] = []
+        with _paid_runner([402, 402, {"ok": True}]) as (_, sessions):
+            result = await _paid_call(reported.append)
+
+        assert len(sessions) == 2
+        assert reported == sessions
+        assert result.payment_session is None
+
+    async def test_reports_nothing_when_the_runner_asks_no_payment(self) -> None:
+        reported: list[object] = []
+        with _paid_runner([{"ok": True}]) as (_, sessions):
+            await _paid_call(reported.append)
+
+        assert sessions == []
+        assert reported == []
+
+    async def test_runner_error_after_payment_is_raised_unchanged(self) -> None:
+        reported: list[object] = []
+        failure = LivepeerHTTPError(500, _RUNNER_URL, "boom", "server error")
+        with _paid_runner([402, failure]) as (_, sessions):
+            with pytest.raises(LivepeerHTTPError) as info:
+                await _paid_call(reported.append)
+
+        assert info.value is failure
+        assert reported == sessions
+
+    async def test_skips_a_session_the_signer_refused(self) -> None:
+        reported: list[object] = []
+        with _paid_runner([402, 402], [None, PaymentError("signer down")]) as (
+            requests,
+            sessions,
+        ):
+            with pytest.raises(PaymentError):
+                await _paid_call(reported.append)
+
+        assert len(sessions) == 2
+        assert reported == sessions[:1]
+        assert len(requests) == 2
+
+    async def test_reports_a_signed_session_whose_payment_is_unusable(self) -> None:
+        reported: list[object] = []
+        unusable = SimpleNamespace(payment="payment-b64", seg_creds="")
+        with _paid_runner([402], [unusable]) as (requests, sessions):
+            with pytest.raises(LivepeerGatewayError, match="missing segCreds"):
+                await _paid_call(reported.append)
+
+        assert reported == sessions
+        assert len(requests) == 1
+
+    async def test_failing_callback_stops_the_paid_request(self) -> None:
+        def _report(session: object) -> None:
+            del session
+            raise RuntimeError("ledger unavailable")
+
+        with _paid_runner([402]) as (requests, _):
+            with pytest.raises(RuntimeError, match="ledger unavailable"):
+                await _paid_call(_report)
+
+        assert len(requests) == 1
+
+    async def test_reported_sessions_outlive_a_cancelled_call(self) -> None:
+        reported: list[object] = []
+        with _paid_runner([402, "hang"]) as (requests, sessions):
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(_paid_call(reported.append), 0.1)
+
+        assert len(requests) == 2
+        assert reported == sessions
 
 
 class _FakeO2RReader:
@@ -1849,326 +2015,3 @@ class TestLiveRunnerGPU:
             gpu = live_runner._detect_gpu_torch()
 
         assert gpu == LiveRunnerGPU(id="1", name="Torch GPU", vram_mb=32)
-
-
-# ---------------------------------------------------------------------------
-# call_runner against a real runner. The signer is faked; the runner is a real
-# aiohttp application on an ephemeral port.
-# ---------------------------------------------------------------------------
-
-
-@contextlib.asynccontextmanager
-async def _serve(app: web.Application) -> AsyncIterator[str]:
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        await runner.cleanup()
-
-
-class _RecordedRequest:
-    def __init__(self, request: web.Request, body: bytes) -> None:
-        self.path = request.path
-        self.method = request.method
-        self.headers = dict(request.headers)
-        self.body = body
-
-
-class _FakePaymentSession:
-    """Stands in for LivePaymentSession: returns fixed tickets, funds forever."""
-
-    instances: list[_FakePaymentSession] = []
-    # What each session's get_payment raises, in order; None signs normally.
-    errors: list[Exception | None] = []
-
-    def __init__(self, signer_url: str, **kwargs: object) -> None:
-        self.signer_url = signer_url
-        self.kwargs = kwargs
-        self.auth_id = f"auth-{len(type(self).instances) + 1}"
-        type(self).instances.append(self)
-
-    async def get_payment(self) -> object:
-        error = type(self).errors.pop(0) if type(self).errors else None
-        if error is not None:
-            raise error
-        return SimpleNamespace(payment="payment-b64", seg_creds="seg-b64")
-
-    async def run_payments(self) -> bool:
-        await asyncio.Event().wait()
-        return False
-
-
-@contextlib.contextmanager
-def _fake_signer(errors: list[Exception | None] | None = None) -> Iterator[None]:
-    _FakePaymentSession.instances = []
-    _FakePaymentSession.errors = list(errors or [])
-    with (
-        mock.patch.object(live_runner, "LivePaymentSession", _FakePaymentSession),
-        mock.patch.object(
-            live_runner,
-            "get_signer_info",
-            new_callable=mock.AsyncMock,
-            return_value=SimpleNamespace(address="opaque-payer", sig="opaque-signature"),
-        ),
-    ):
-        yield
-
-
-def _runner_app(
-    seen: list[_RecordedRequest],
-    *,
-    statuses: list[int | str] | None = None,
-    stream: bool = False,
-) -> web.Application:
-    """A runner that answers each request with the next status in ``statuses``.
-
-    402 carries a payment challenge; 200 answers JSON, or two SSE frames when
-    ``stream`` is set. ``"hang"`` never answers in time, and ``"truncated"``
-    starts a 500 and drops the connection mid-body.
-    """
-    pending = list(statuses or [200])
-
-    async def handler(request: web.Request) -> web.StreamResponse:
-        body = await request.read()
-        seen.append(_RecordedRequest(request, body))
-        status = pending.pop(0) if len(pending) > 1 else pending[0]
-        if status == "hang":
-            await asyncio.sleep(1)
-            return web.Response(status=500)
-        if status == "truncated":
-            resp = web.StreamResponse(status=500)
-            resp.content_length = 1000
-            await resp.prepare(request)
-            await resp.write(b"partial")
-            assert request.transport is not None
-            request.transport.close()
-            return resp
-        if status == 402:
-            return web.Response(
-                status=402,
-                text=_payment_challenge_body("manifest-1"),
-                content_type="application/json",
-            )
-        if status != 200:
-            return web.Response(status=int(status), text="no")
-        if stream:
-            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
-            await resp.prepare(request)
-            await resp.write(b"data: one\n\n")
-            await resp.write(b"data: two\n\n")
-            await resp.write_eof()
-            return resp
-        return web.json_response({"text": "hello", "n": len(seen)})
-
-    app = web.Application()
-    app.router.add_route("*", "/call", handler)
-    return app
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def _paid_call(base: str, **kwargs: object):
-    return call_runner(
-        f"{base}/call",
-        payload={"prompt": "hi"},
-        signer_url="https://signer.example.com",
-        payment_unit="seconds",
-        **kwargs,
-    )
-
-
-class TestCallRunnerStreamSessionId:
-    async def test_stream_carries_manifest_id(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402, 200], stream=True)) as base:
-            with _fake_signer():
-                async with await _paid_call(base, stream=True) as stream:
-                    assert stream.session_id == "manifest-1"
-                    assert stream.auth_ids == ("auth-1",)
-                    assert stream.payment_session is _FakePaymentSession.instances[0]
-                    lines = [line async for line in stream.aiter_lines() if line]
-
-        assert lines == ["data: one", "data: two"]
-        assert len(seen) == 2
-
-    async def test_stream_without_signer_has_empty_session_id(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, stream=True)) as base:
-            async with await call_runner(f"{base}/call", payload={}, stream=True) as stream:
-                assert stream.session_id == ""
-
-
-class TestCallRunnerPaymentSent:
-    @pytest.mark.parametrize("status", [500, 400])
-    async def test_error_after_payment_carries_the_auth_id(self, status: int) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402, status])) as base:
-            with _fake_signer():
-                with pytest.raises(LivepeerHTTPError) as info:
-                    await _paid_call(base)
-        assert info.value.status_code == status
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1",)
-        assert len(seen) == 2
-
-    @pytest.mark.parametrize("status", [400, 503])
-    async def test_error_before_payment_has_no_auth_id(self, status: int) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[status])) as base:
-            with _fake_signer():
-                with pytest.raises(LivepeerHTTPError) as info:
-                    await _paid_call(base)
-        assert info.value.status_code == status
-        assert info.value.payment_sent is False
-        assert info.value.auth_ids == ()
-        assert len(seen) == 1
-
-    async def test_connection_refused_before_challenge(self) -> None:
-        with pytest.raises(LivepeerGatewayError, match="connection refused") as info:
-            await call_runner(f"http://127.0.0.1:{_free_port()}/call", payload={"prompt": "hi"})
-        assert info.value.payment_sent is False
-
-    async def test_stream_error_after_payment_says_so(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402, 500])) as base:
-            with _fake_signer():
-                with pytest.raises(LivepeerHTTPError) as info:
-                    await _paid_call(base, stream=True)
-        assert info.value.status_code == 500
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1",)
-
-    async def test_exhausted_retries_after_payment_says_so(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402])) as base:
-            with _fake_signer():
-                with pytest.raises(LivepeerGatewayError, match="exhausted") as info:
-                    await _paid_call(base, max_payment_challenge_retries=1)
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1", "auth-2", "auth-3")
-
-    async def test_paid_call_without_signer_is_unpaid(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402])) as base:
-            with pytest.raises(LivepeerGatewayError, match="requires signer_url") as info:
-                await call_runner(f"{base}/call", payload={"prompt": "hi"})
-        assert info.value.payment_sent is False
-        assert info.value.auth_ids == ()
-
-
-class TestCallRunnerRecord:
-    async def test_attempts_record_the_challenge_and_success(self) -> None:
-        seen: list[_RecordedRequest] = []
-        record = RunnerCallRecord()
-        async with _serve(_runner_app(seen, statuses=[402, 200])) as base:
-            with _fake_signer():
-                result = await _paid_call(base, record=record)
-        assert result.record is record
-        assert result.payment_sent is True
-        assert record.runner_url == f"{base}/call"
-        assert [a.outcome for a in record.attempts] == ["payment_required", "succeeded"]
-        assert [a.status_code for a in record.attempts] == [402, None]
-        assert [a.payment_sent for a in record.attempts] == [False, True]
-        assert [a.manifest_id for a in record.attempts] == ["", "manifest-1"]
-        assert [a.auth_id for a in record.attempts] == ["", "auth-1"]
-
-    async def test_signer_failure_after_a_paid_attempt_still_says_paid(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402])) as base:
-            with _fake_signer([None, PaymentError("signer down")]):
-                with pytest.raises(PaymentError) as info:
-                    await _paid_call(base)
-        record = info.value.record
-        assert record is not None
-        assert [a.outcome for a in record.attempts] == ["payment_required", "payment_required", "payment"]
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1", "auth-2")
-
-    async def test_unpaid_retry_after_refresh_still_says_paid(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402, 402, 500])) as base:
-            with _fake_signer([None, SignerRefreshRequired("refresh")]):
-                with pytest.raises(LivepeerHTTPError) as info:
-                    await _paid_call(base)
-        assert info.value.status_code == 500
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1", "auth-2")
-        assert info.value.record is not None
-        assert info.value.record.attempts[-1].payment_sent is False
-        assert info.value.record.outcome == "http"
-
-    async def test_refresh_on_the_last_attempt_keeps_earlier_auth_ids(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402])) as base:
-            with _fake_signer([None, None, SignerRefreshRequired("refresh")]):
-                with pytest.raises(SignerRefreshRequired) as info:
-                    await _paid_call(base, max_payment_challenge_retries=1)
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1", "auth-2", "auth-3")
-        assert info.value.record is not None
-        assert info.value.record.outcome == "payment"
-
-    async def test_truncated_stream_error_after_payment_is_wrapped(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[402, "truncated"], stream=True)) as base:
-            with _fake_signer():
-                with pytest.raises(LivepeerGatewayError, match="Live runner call failed") as info:
-                    await _paid_call(base, stream=True)
-        assert not isinstance(info.value, LivepeerHTTPError)
-        assert info.value.payment_sent is True
-        assert info.value.auth_ids == ("auth-1",)
-        assert info.value.record is not None
-        assert info.value.record.outcome == "disconnected"
-
-    async def test_cancelled_call_leaves_the_record_readable(self) -> None:
-        seen: list[_RecordedRequest] = []
-        record = RunnerCallRecord()
-        async with _serve(_runner_app(seen, statuses=[402, "hang"])) as base:
-            with _fake_signer():
-                with pytest.raises(TimeoutError):
-                    await asyncio.wait_for(_paid_call(base, record=record), 0.5)
-        assert record.payment_sent is True
-        assert record.auth_ids == ("auth-1",)
-        assert record.outcome == "cancelled"
-
-    async def test_refused_connection_is_unreachable(self) -> None:
-        with pytest.raises(LivepeerGatewayError) as info:
-            await call_runner(f"http://127.0.0.1:{_free_port()}/call", payload={})
-        assert info.value.record is not None
-        assert info.value.record.outcome == "unreachable"
-        assert info.value.payment_sent is False
-
-    async def test_slow_runner_is_a_timeout_not_unreachable(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=["hang"])) as base:
-            with pytest.raises(LivepeerGatewayError) as info:
-                await call_runner(f"{base}/call", payload={}, timeout=0.2)
-        assert len(seen) == 1
-        assert info.value.record is not None
-        assert info.value.record.outcome == "timeout"
-
-    @pytest.mark.parametrize(("status", "outcome"), [(503, "refused"), (400, "http")])
-    async def test_runner_error_status_outcomes(self, status: int, outcome: str) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, statuses=[status])) as base:
-            with pytest.raises(LivepeerHTTPError) as info:
-                await call_runner(f"{base}/call", payload={})
-        assert info.value.record is not None
-        assert info.value.record.outcome == outcome
-        assert info.value.record.attempts[0].status_code == status
-
-    async def test_stream_records_its_status(self) -> None:
-        seen: list[_RecordedRequest] = []
-        async with _serve(_runner_app(seen, stream=True)) as base:
-            async with await call_runner(f"{base}/call", payload={}, stream=True) as stream:
-                assert stream.record.outcome == "succeeded"
-                assert stream.record.attempts[0].status_code == 200
-                assert stream.payment_sent is False

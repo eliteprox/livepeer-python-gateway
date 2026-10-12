@@ -16,12 +16,16 @@ from livepeer_gateway.remote_signer import (
     LivePaymentChallenge,
     LivePaymentSession,
     PaymentSession,
-    auth_id_from_signer_state,
     get_signer_info,
 )
 
 
 _PAYMENT_URL = "https://orch.example.com/apps/runner/session/manifest-1/payment"
+
+
+def _signed_state(fields: dict[str, object]) -> dict[str, object]:
+    """The state go-livepeer returns: JSON fields base64-encoded under ``State``."""
+    return {"State": base64.standard_b64encode(json.dumps(fields).encode()).decode(), "Sig": "c2ln"}
 
 
 def _challenge(*, payment_params: str = "opaque") -> LivePaymentChallenge:
@@ -364,11 +368,21 @@ class TestLivePaymentSession:
         assert first.sig == "opaque-signature"
         assert len(calls) == 1
 
-    async def test_auth_id_is_read_from_the_signed_state(self) -> None:
-        signed = base64.standard_b64encode(
-            json.dumps({"StateID": "state-1", "AuthID": "auth-1"}).encode()
-        ).decode()
-
+    @pytest.mark.parametrize(
+        ("state", "auth_id"),
+        [
+            (_signed_state({"StateID": "state-1", "AuthID": "auth-1"}), "auth-1"),
+            (_signed_state({"StateID": "state-1", "AuthID": ""}), ""),
+            (_signed_state({"StateID": "state-1"}), ""),
+            ({"State": "not base64 json", "Sig": "c2ln"}, ""),
+            ({"state": "opaque"}, ""),
+        ],
+    )
+    async def test_auth_id_is_read_from_the_signed_state(
+        self,
+        state: dict[str, object],
+        auth_id: str,
+    ) -> None:
         async def _post_json(
             url: str,
             payload: dict[str, object],
@@ -377,27 +391,15 @@ class TestLivePaymentSession:
             timeout: float = 5.0,
         ) -> dict[str, object]:
             del url, payload, headers, timeout
-            return {
-                "payment": "payment",
-                "segCreds": "segment",
-                "state": {"State": signed, "Sig": "sig"},
-            }
+            return {"payment": "payment", "segCreds": "segment", "state": state}
 
+        session = LivePaymentSession(
+            "https://signer.example.com",
+            type="fixed",
+            challenge=_challenge(),
+        )
+        assert session.auth_id == ""
         with mock.patch("livepeer_gateway.http.post_json", side_effect=_post_json):
-            session = LivePaymentSession(
-                "https://signer.example.com",
-                type="fixed",
-                challenge=_challenge(),
-            )
-            assert session.auth_id == ""
             await session.get_payment()
 
-        assert session.auth_id == "auth-1"
-
-
-def test_auth_id_is_empty_when_the_signer_state_has_none() -> None:
-    assert auth_id_from_signer_state(None) == ""
-    assert auth_id_from_signer_state({"state": "lowercase"}) == ""
-    assert auth_id_from_signer_state({"State": "not-json"}) == ""
-    encoded = base64.standard_b64encode(json.dumps({"StateID": "state-1"}).encode()).decode()
-    assert auth_id_from_signer_state({"State": encoded}) == ""
+        assert session.auth_id == auth_id
